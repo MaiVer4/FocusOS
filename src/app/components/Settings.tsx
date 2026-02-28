@@ -248,22 +248,22 @@ export function Settings() {
             <Key className="size-4 text-purple-400" /> Integraciones IA
           </h3>
           <div>
-            <label className="block text-sm text-zinc-400 mb-1">Clave API de OpenAI</label>
+            <label className="block text-sm text-zinc-400 mb-1">Clave API de DeepSeek</label>
             <p className="text-xs text-zinc-600 mb-2">
-              Necesaria para clasificación inteligente de tareas. Obtener en{' '}
-              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer"
-                className="text-purple-400 underline">platform.openai.com</a>
+              Necesaria para clasificación inteligente de tareas con DeepSeek-V3. Obtener en{' '}
+              <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer"
+                className="text-purple-400 underline">platform.deepseek.com</a>
             </p>
             <input
               type="password"
-              value={settings.openaiApiKey ?? ''}
-              onChange={(e) => update('openaiApiKey', e.target.value)}
+              value={settings.deepseekApiKey ?? ''}
+              onChange={(e) => update('deepseekApiKey', e.target.value)}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
               placeholder="sk-..."
               autoComplete="off"
             />
-            {settings.openaiApiKey && (
-              <p className="text-xs text-green-500 mt-1.5">✓ Clave configurada</p>
+            {settings.deepseekApiKey && (
+              <p className="text-xs text-green-500 mt-1.5">✓ Clave configurada · DeepSeek-V3</p>
             )}
           </div>
         </div>

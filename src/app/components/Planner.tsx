@@ -700,9 +700,9 @@ export function Planner() {
               <h3 className="text-xl font-bold">Importar con IA</h3>
             </div>
             <p className="text-zinc-500 text-sm mb-4">
-              {store.getSettings().openaiApiKey
-                ? <span className="text-green-500">Usando OpenAI · GPT-4o mini</span>
-                : <span>Clasificación automática (añade tu clave en <span className="text-purple-400">Ajustes</span> para IA real)</span>
+              {store.getSettings().deepseekApiKey
+                ? <span className="text-green-500">Usando DeepSeek · deepseek-chat (V3)</span>
+                : <span>Clasificación automática por keywords (añade tu clave en <span className="text-purple-400">Ajustes</span> para IA real)</span>
               }
             </p>
 

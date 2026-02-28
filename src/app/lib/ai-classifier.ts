@@ -10,7 +10,7 @@ export interface ParsedItem {
   dueDate?: string; // YYYY-MM-DD
 }
 
-// ─── System prompt for OpenAI ─────────────────────────────────────────────────
+// ─── System prompt para DeepSeek ────────────────────────────────────────────
 
 const SYSTEM_PROMPT = `Eres un asistente de productividad. El usuario te dará una lista de tareas o actividades. Clasifica cada ítem y responde SOLO con un array JSON válido (sin markdown, sin texto extra, sin comentarios).
 
@@ -89,7 +89,7 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
 
   if (lines.length === 0) return [];
 
-  const apiKey = store.getSettings().openaiApiKey;
+  const apiKey = store.getSettings().deepseekApiKey;
 
   if (!apiKey) {
     return lines.map(classifyByKeywords);
@@ -100,14 +100,14 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
   });
 
   try {
-    const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    const res = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'deepseek-chat',
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
           { role: 'user', content: `Hoy es ${today}.\n\nTareas:\n${lines.join('\n')}` },
@@ -116,7 +116,7 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
       }),
     });
 
-    if (!res.ok) throw new Error(`OpenAI ${res.status}`);
+    if (!res.ok) throw new Error(`DeepSeek ${res.status}`);
 
     const data = await res.json();
     const content = (data.choices[0].message.content as string)
@@ -128,7 +128,7 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
     const parsed = JSON.parse(content) as ParsedItem[];
     return parsed;
   } catch (err) {
-    console.error('AI classification failed, using keyword fallback:', err);
+    console.error('DeepSeek classification failed, using keyword fallback:', err);
     return lines.map(classifyByKeywords);
   }
 }
