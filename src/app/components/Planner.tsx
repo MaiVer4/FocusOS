@@ -42,6 +42,7 @@ export function Planner() {
   const [classroomTasks, setClassroomTasks] = useState<ClassroomTask[]>([]);
   const [classroomLoading, setClassroomLoading] = useState(false);
   const [classroomError, setClassroomError] = useState<string | null>(null);
+  const [classroomConnected, setClassroomConnected] = useState(false);
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -62,6 +63,7 @@ export function Planner() {
 
   useEffect(() => {
     refreshData();
+    setClassroomConnected(googleAuth.isAuthenticated());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
@@ -348,6 +350,7 @@ export function Planner() {
     setClassroomTasks([]);
     try {
       await googleAuth.authenticate();
+      setClassroomConnected(true);
       const tasks = await getClassroomPendingTasks();
       if (tasks.length === 0) {
         setClassroomError('No se encontraron tareas pendientes en tus cursos.');
@@ -648,9 +651,18 @@ export function Planner() {
               )}
               <button
                 onClick={() => { setClassroomTasks([]); setClassroomError(null); setShowClassroom(true); }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-green-600 hover:bg-green-700 rounded-lg text-xs font-semibold transition-colors"
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                  classroomConnected
+                    ? 'bg-green-600 hover:bg-green-700'
+                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                }`}
               >
-                <GraduationCap className="size-3.5" />
+                <span className="relative">
+                  <GraduationCap className="size-3.5" />
+                  <span className={`absolute -top-1 -right-1 size-2 rounded-full border border-zinc-900 ${
+                    classroomConnected ? 'bg-green-400' : 'bg-red-400'
+                  }`} />
+                </span>
                 Classroom
               </button>
               <button
@@ -1269,13 +1281,37 @@ export function Planner() {
               <GraduationCap className="size-5 text-green-400" />
               <h3 className="text-xl font-bold">Google Classroom</h3>
             </div>
-            <p className="text-zinc-500 text-sm mb-4">Importa tareas pendientes de tus cursos</p>
+
+            {/* Estado de conexión */}
+            <div className={`flex items-center justify-between rounded-xl px-3 py-2 mb-4 ${
+              classroomConnected
+                ? 'bg-green-900/20 border border-green-800/30'
+                : 'bg-zinc-800 border border-zinc-700'
+            }`}>
+              <div className="flex items-center gap-2">
+                <span className={`size-2.5 rounded-full ${classroomConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+                <span className={`text-sm font-medium ${classroomConnected ? 'text-green-400' : 'text-zinc-400'}`}>
+                  {classroomConnected ? 'Conectado' : 'Desconectado'}
+                </span>
+              </div>
+              {classroomConnected && (
+                <button
+                  type="button"
+                  onClick={() => { googleAuth.signOut(); setClassroomConnected(false); }}
+                  className="text-xs text-zinc-500 hover:text-red-400 transition-colors"
+                >
+                  Desconectar
+                </button>
+              )}
+            </div>
 
             {/* Sin datos cargados todavía */}
             {classroomTasks.length === 0 && !classroomLoading && !classroomError && (
               <div className="space-y-4">
                 <p className="text-sm text-zinc-400">
-                  Conectá tu cuenta de Google para traer las tareas de Classroom automáticamente.
+                  {classroomConnected
+                    ? 'Obtén tus tareas pendientes de Classroom.'
+                    : 'Conectá tu cuenta de Google para traer las tareas de Classroom automáticamente.'}
                 </p>
                 <div className="flex gap-3">
                   <button type="button" onClick={() => setShowClassroom(false)}
@@ -1284,7 +1320,7 @@ export function Planner() {
                   </button>
                   <button type="button" onClick={handleClassroomImport}
                     className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2">
-                    <GraduationCap className="size-4" /> Conectar
+                    <GraduationCap className="size-4" /> {classroomConnected ? 'Obtener tareas' : 'Conectar'}
                   </button>
                 </div>
               </div>
