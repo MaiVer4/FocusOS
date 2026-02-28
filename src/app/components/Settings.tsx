@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { store, DEFAULT_SETTINGS } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { UserSettings } from '../lib/types';
-import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw } from 'lucide-react';
+import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Key } from 'lucide-react';
 
 export function Settings() {
   const [settings, setSettings] = useState<UserSettings>(store.getSettings());
@@ -242,7 +242,33 @@ export function Settings() {
           </div>
         </div>
 
-        {/* Notifications */}
+        {/* Integrations */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Key className="size-4 text-purple-400" /> Integraciones IA
+          </h3>
+          <div>
+            <label className="block text-sm text-zinc-400 mb-1">Clave API de OpenAI</label>
+            <p className="text-xs text-zinc-600 mb-2">
+              Necesaria para clasificación inteligente de tareas. Obtener en{' '}
+              <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer"
+                className="text-purple-400 underline">platform.openai.com</a>
+            </p>
+            <input
+              type="password"
+              value={settings.openaiApiKey ?? ''}
+              onChange={(e) => update('openaiApiKey', e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+              placeholder="sk-..."
+              autoComplete="off"
+            />
+            {settings.openaiApiKey && (
+              <p className="text-xs text-green-500 mt-1.5">✓ Clave configurada</p>
+            )}
+          </div>
+        </div>
+
+        {/* Notifications */}}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
           <h3 className="font-semibold flex items-center gap-2">
             <Bell className="size-4 text-blue-400" /> Notificaciones
