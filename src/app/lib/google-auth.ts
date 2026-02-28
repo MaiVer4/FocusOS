@@ -4,7 +4,7 @@
  */
 
 // Client ID de Google Cloud Console
-const CLIENT_ID = '816126025512-l7b49blf2bjdj3e0ij2t8lah2k34d68h.apps.googleusercontent.com';
+const CLIENT_ID = '470733236827-6d756k50hohamsq3hhur273f13f99167.apps.googleusercontent.com';
 
 // Scopes necesarios
 const SCOPES = [
