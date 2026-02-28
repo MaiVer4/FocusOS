@@ -1,8 +1,10 @@
 /**
  * Google Classroom API — Obtiene cursos y tareas del usuario
+ * Funciona con scopes: courses.readonly + student-submissions.me.readonly
  */
 
 import { googleAuth } from './google-auth';
+import { todayStr } from './helpers';
 
 const BASE = 'https://classroom.googleapis.com/v1';
 
@@ -31,8 +33,13 @@ export interface ClassroomCoursework {
 export interface ClassroomSubmission {
   id: string;
   courseWorkId: string;
+  courseId: string;
+  courseWorkType: string;
   state: 'NEW' | 'CREATED' | 'TURNED_IN' | 'RETURNED' | 'RECLAIMED_BY_STUDENT';
   assignedGrade?: number;
+  late?: boolean;
+  creationTime?: string;
+  updateTime?: string;
 }
 
 /** Tarea procesada lista para importar en FocusOS */
@@ -42,7 +49,7 @@ export interface ClassroomTask {
   courseworkId: string;
   title: string;
   description: string;
-  dueDate: string;        // ISO string
+  dueDate: string;
   isDeliverable: boolean;
   submitted: boolean;
   selected: boolean;
@@ -66,6 +73,19 @@ async function apiFetch<T>(url: string): Promise<T> {
   return res.json();
 }
 
+/** Fetch que no lanza error en 403, retorna null */
+async function apiFetchSafe<T>(url: string): Promise<T | null> {
+  const token = googleAuth.getAccessToken();
+  if (!token) return null;
+
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!res.ok) return null;
+  return res.json();
+}
+
 /** Obtiene los cursos activos del usuario */
 export async function getCourses(): Promise<ClassroomCourse[]> {
   const data = await apiFetch<{ courses?: ClassroomCourse[] }>(
@@ -74,15 +94,7 @@ export async function getCourses(): Promise<ClassroomCourse[]> {
   return data.courses ?? [];
 }
 
-/** Obtiene las tareas (coursework) de un curso */
-export async function getCoursework(courseId: string): Promise<ClassroomCoursework[]> {
-  const data = await apiFetch<{ courseWork?: ClassroomCoursework[] }>(
-    `${BASE}/courses/${courseId}/courseWork?orderBy=dueDate+asc&pageSize=50`
-  );
-  return data.courseWork ?? [];
-}
-
-/** Obtiene las entregas del usuario en un curso */
+/** Obtiene las entregas del usuario en un curso (scope: student-submissions.me.readonly) */
 export async function getMySubmissions(courseId: string): Promise<ClassroomSubmission[]> {
   const data = await apiFetch<{ studentSubmissions?: ClassroomSubmission[] }>(
     `${BASE}/courses/${courseId}/courseWork/-/studentSubmissions?pageSize=100`
@@ -90,70 +102,79 @@ export async function getMySubmissions(courseId: string): Promise<ClassroomSubmi
   return data.studentSubmissions ?? [];
 }
 
+/** Intenta obtener detalles de un coursework individual (puede fallar si no hay scope) */
+async function getCourseworkDetails(courseId: string, courseworkId: string): Promise<ClassroomCoursework | null> {
+  return apiFetchSafe<ClassroomCoursework>(
+    `${BASE}/courses/${courseId}/courseWork/${courseworkId}`
+  );
+}
+
 // ─── Función principal: obtener tareas pendientes ─────────────────────────────
 
 /**
- * Obtiene las tareas pendientes de todos los cursos activos.
- * Filtra las ya entregadas y las sin fecha de vencimiento.
+ * Obtiene las tareas pendientes usando submissions (que SÍ tenemos scope).
+ * Luego intenta enriquecer con datos de coursework (si hay scope, los agrega).
  */
 export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
   const courses = await getCourses();
   const tasks: ClassroomTask[] = [];
+  const today = todayStr();
 
   for (const course of courses) {
-    const [coursework, submissions] = await Promise.all([
-      getCoursework(course.id),
-      getMySubmissions(course.id),
-    ]);
+    const submissions = await getMySubmissions(course.id);
 
-    // Map de courseworkId → submission state
-    const submissionMap = new Map<string, ClassroomSubmission>();
-    for (const sub of submissions) {
-      submissionMap.set(sub.courseWorkId, sub);
-    }
+    // Filtrar solo entregas pendientes (no entregadas ni devueltas)
+    const pending = submissions.filter(
+      s => s.state === 'NEW' || s.state === 'CREATED' || s.state === 'RECLAIMED_BY_STUDENT'
+    );
 
-    for (const cw of coursework) {
-      // Construir fecha de vencimiento
-      let dueDateStr = '';
-      if (cw.dueDate) {
-        const y = cw.dueDate.year;
-        const m = String(cw.dueDate.month).padStart(2, '0');
-        const d = String(cw.dueDate.day).padStart(2, '0');
-        if (cw.dueTime && cw.dueTime.hours !== undefined) {
-          const hh = String(cw.dueTime.hours).padStart(2, '0');
-          const mm = String(cw.dueTime.minutes ?? 0).padStart(2, '0');
-          dueDateStr = `${y}-${m}-${d}T${hh}:${mm}`;
-        } else {
-          dueDateStr = `${y}-${m}-${d}`;
+    for (const sub of pending) {
+      // Intentar obtener detalles del coursework
+      const cw = await getCourseworkDetails(course.id, sub.courseWorkId);
+
+      let title = `Tarea de ${course.name}`;
+      let description = '';
+      let dueDateStr = today;
+
+      if (cw) {
+        title = cw.title;
+        description = cw.description ?? '';
+
+        if (cw.dueDate) {
+          const y = cw.dueDate.year;
+          const m = String(cw.dueDate.month).padStart(2, '0');
+          const d = String(cw.dueDate.day).padStart(2, '0');
+          if (cw.dueTime && cw.dueTime.hours !== undefined) {
+            const hh = String(cw.dueTime.hours).padStart(2, '0');
+            const mm = String(cw.dueTime.minutes ?? 0).padStart(2, '0');
+            dueDateStr = `${y}-${m}-${d}T${hh}:${mm}`;
+          } else {
+            dueDateStr = `${y}-${m}-${d}`;
+          }
         }
       }
 
-      // Ignorar tareas sin fecha
-      if (!dueDateStr) continue;
-
-      // Verificar si ya fue entregada
-      const sub = submissionMap.get(cw.id);
-      const submitted = sub?.state === 'TURNED_IN' || sub?.state === 'RETURNED';
-
-      // Solo incluir tareas futuras o no entregadas
+      // Solo incluir tareas con fecha futura o de hoy
       const dueMs = new Date(dueDateStr.includes('T') ? dueDateStr : dueDateStr + 'T23:59:00').getTime();
-      if (submitted || dueMs < Date.now()) continue;
+      if (dueMs < Date.now() && dueDateStr !== today) continue;
+
+      // Evitar duplicados
+      if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
 
       tasks.push({
         courseId: course.id,
         courseName: course.name,
-        courseworkId: cw.id,
-        title: cw.title,
-        description: cw.description ?? '',
+        courseworkId: sub.courseWorkId,
+        title,
+        description,
         dueDate: dueDateStr,
         isDeliverable: true,
-        submitted,
+        submitted: false,
         selected: true,
       });
     }
   }
 
-  // Ordenar por fecha de vencimiento
   tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
   return tasks;
 }

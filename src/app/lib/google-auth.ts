@@ -6,10 +6,9 @@
 // Client ID de Google Cloud Console
 const CLIENT_ID = '470733236827-6d756k50hohamsq3hhur273f13f99167.apps.googleusercontent.com';
 
-// Scopes necesarios
+// Scopes necesarios (solo los que están disponibles en la consola)
 const SCOPES = [
   'https://www.googleapis.com/auth/classroom.courses.readonly',
-  'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
 ].join(' ');
 
@@ -64,14 +63,14 @@ class GoogleAuth {
   }
 
   /** Solicita acceso al usuario vía popup OAuth2 */
-  authenticate(): Promise<string> {
+  authenticate(forceConsent = false): Promise<string> {
     return new Promise((resolve, reject) => {
       if (!this.isReady()) {
         reject(new Error('Google Identity Services no está cargado'));
         return;
       }
 
-      if (this.isAuthenticated()) {
+      if (this.isAuthenticated() && !forceConsent) {
         resolve(this.accessToken!);
         return;
       }
@@ -93,7 +92,7 @@ class GoogleAuth {
         },
       });
 
-      this.tokenClient.requestAccessToken({ prompt: '' });
+      this.tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' });
     });
   }
 

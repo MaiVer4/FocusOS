@@ -349,7 +349,9 @@ export function Planner() {
     setClassroomError(null);
     setClassroomTasks([]);
     try {
-      await googleAuth.authenticate();
+      // Siempre forzar consentimiento para asegurar que se otorguen todos los scopes
+      googleAuth.signOut();
+      await googleAuth.authenticate(true);
       setClassroomConnected(true);
       const tasks = await getClassroomPendingTasks();
       if (tasks.length === 0) {
@@ -358,7 +360,16 @@ export function Planner() {
       setClassroomTasks(tasks);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido';
-      setClassroomError(msg);
+      if (msg.includes('403')) {
+        setClassroomError(
+          'Permiso denegado. Verifica en Google Cloud Console:\n' +
+          '1. Que la API "Google Classroom API" esté habilitada\n' +
+          '2. Que los scopes de Classroom estén en la pantalla de consentimiento OAuth\n' +
+          '3. Que aceptaste TODOS los permisos en el popup de Google'
+        );
+      } else {
+        setClassroomError(msg);
+      }
     } finally {
       setClassroomLoading(false);
     }
@@ -1338,8 +1349,20 @@ export function Planner() {
             {classroomError && (
               <div className="space-y-4">
                 <div className="bg-red-900/20 border border-red-800/30 rounded-xl p-4">
-                  <p className="text-sm text-red-400">{classroomError}</p>
+                  <p className="text-sm text-red-400 whitespace-pre-line">{classroomError}</p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    googleAuth.signOut();
+                    setClassroomConnected(false);
+                    setClassroomError(null);
+                    setClassroomTasks([]);
+                  }}
+                  className="w-full py-2.5 bg-orange-900/30 hover:bg-orange-800/40 text-orange-400 rounded-xl text-sm font-semibold transition-colors"
+                >
+                  Desconectar cuenta de Google
+                </button>
                 <div className="flex gap-3">
                   <button type="button" onClick={() => setShowClassroom(false)}
                     className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors">
