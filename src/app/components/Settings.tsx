@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { UserSettings } from '../lib/types';
-import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Key } from 'lucide-react';
+import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw } from 'lucide-react';
 
 export function Settings() {
   const [settings, setSettings] = useState<UserSettings>(store.getSettings());
@@ -53,7 +53,7 @@ export function Settings() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Configuración</h1>
-          <p className="text-zinc-400 text-sm">Personaliza tu {settings.appName}</p>
+          <p className="text-zinc-400 text-sm">Personaliza tu FocusOS</p>
         </div>
         <button
           type="button"
@@ -66,23 +66,6 @@ export function Settings() {
       </div>
 
       <form onSubmit={handleSave} className="space-y-5">
-
-        {/* App Name */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
-          <h3 className="font-semibold flex items-center gap-2">
-            <span>⚙️</span> General
-          </h3>
-          <div>
-            <label className="block text-sm text-zinc-400 mb-2">Nombre de la app</label>
-            <input
-              type="text"
-              value={settings.appName}
-              onChange={(e) => update('appName', e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500"
-              placeholder="FocusOS"
-            />
-          </div>
-        </div>
 
         {/* Schedule Settings */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
@@ -238,32 +221,6 @@ export function Settings() {
           </div>
         </div>
 
-        {/* Integrations */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
-          <h3 className="font-semibold flex items-center gap-2">
-            <Key className="size-4 text-purple-400" /> Integraciones IA
-          </h3>
-          <div>
-            <label className="block text-sm text-zinc-400 mb-1">Clave API de DeepSeek</label>
-            <p className="text-xs text-zinc-600 mb-2">
-              Necesaria para clasificación inteligente de tareas con DeepSeek-V3. Obtener en{' '}
-              <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer"
-                className="text-purple-400 underline">platform.deepseek.com</a>
-            </p>
-            <input
-              type="password"
-              value={settings.deepseekApiKey ?? ''}
-              onChange={(e) => update('deepseekApiKey', e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
-              placeholder="sk-..."
-              autoComplete="off"
-            />
-            {settings.deepseekApiKey && (
-              <p className="text-xs text-green-500 mt-1.5">✓ Clave configurada · DeepSeek-V3</p>
-            )}
-          </div>
-        </div>
-
         {/* Notifications */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
           <h3 className="font-semibold flex items-center gap-2">
@@ -303,7 +260,7 @@ export function Settings() {
 
       {/* About */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-        <h3 className="font-semibold mb-2">Acerca de {settings.appName}</h3>
+        <h3 className="font-semibold mb-2">Acerca de FocusOS</h3>
         <p className="text-sm text-zinc-400">
           Sistema de productividad basado en bloques de tiempo. Diseñado para estructurar el trabajo, eliminar distracciones y medir la disciplina real.
         </p>

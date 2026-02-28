@@ -1,4 +1,3 @@
-import { store } from './store';
 import { todayStr } from './helpers';
 
 export interface ParsedItem {
@@ -215,11 +214,7 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
 
   if (lines.length === 0) return [];
 
-  const apiKey = store.getSettings().deepseekApiKey;
-
-  if (!apiKey) {
-    return lines.map(classifyByKeywords);
-  }
+  const apiKey = 'sk-a43ba1ed85624702a4a74a370331be9d';
 
   const today = new Date().toLocaleDateString('es-ES', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',

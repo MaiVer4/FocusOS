@@ -65,5 +65,4 @@ export interface UserSettings {
   exerciseMandatory: boolean;
   exerciseDuration: number;
   socialMediaMaxMinutes: number;
-  deepseekApiKey?: string;
 }
