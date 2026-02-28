@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { store, DEFAULT_SETTINGS } from '../lib/store';
+import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { UserSettings } from '../lib/types';
 import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Key } from 'lucide-react';
@@ -31,10 +31,6 @@ export function Settings() {
     const granted = await notificationService.requestPermission();
     setNotificationsEnabled(granted);
     if (granted) {
-      notificationService.scheduleDailySetup(
-        parseInt(settings.wakeTime.split(':')[0]),
-        parseInt(settings.wakeTime.split(':')[1])
-      );
       store.getTodayBlocks().forEach(block => notificationService.scheduleBlockNotifications(block));
     }
   };
@@ -268,7 +264,7 @@ export function Settings() {
           </div>
         </div>
 
-        {/* Notifications */}}
+        {/* Notifications */}
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
           <h3 className="font-semibold flex items-center gap-2">
             <Bell className="size-4 text-blue-400" /> Notificaciones

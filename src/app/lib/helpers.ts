@@ -59,10 +59,41 @@ export function getDifficultyLabel(difficulty: Difficulty): string {
 
 export function getTaskStatusLabel(status: TaskStatus): string {
   switch (status) {
-    case 'pending':     return 'Pendiente';
-    case 'in-progress': return 'En curso';
-    case 'completed':   return 'Completada';
+    case 'sin-iniciar':          return 'Sin iniciar';
+    case 'en-progreso':          return 'En progreso';
+    case 'en-progreso-aplazada': return 'En progreso (aplazada)';
+    case 'aplazada':             return 'Aplazada';
+    case 'terminada':            return 'Terminada';
   }
+}
+
+export function getTaskStatusColor(status: TaskStatus): string {
+  switch (status) {
+    case 'sin-iniciar':          return 'bg-zinc-600/20 text-zinc-400';
+    case 'en-progreso':          return 'bg-blue-600/20 text-blue-400';
+    case 'en-progreso-aplazada': return 'bg-orange-600/20 text-orange-400';
+    case 'aplazada':             return 'bg-yellow-600/20 text-yellow-400';
+    case 'terminada':            return 'bg-green-600/20 text-green-400';
+  }
+}
+
+const CATEGORY_COLORS: Record<string, string> = {
+  java:            'bg-orange-600/20 text-orange-400',
+  javascript:      'bg-yellow-600/20 text-yellow-400',
+  js:              'bg-yellow-600/20 text-yellow-400',
+  typescript:      'bg-blue-600/20 text-blue-400',
+  ts:              'bg-blue-600/20 text-blue-400',
+  python:          'bg-emerald-600/20 text-emerald-400',
+  'bases de datos': 'bg-cyan-600/20 text-cyan-400',
+  sql:             'bg-cyan-600/20 text-cyan-400',
+  react:           'bg-sky-600/20 text-sky-400',
+  html:            'bg-red-600/20 text-red-400',
+  css:             'bg-indigo-600/20 text-indigo-400',
+  sena:            'bg-purple-600/20 text-purple-400',
+};
+
+export function getCategoryColor(category: string): string {
+  return CATEGORY_COLORS[category.toLowerCase()] ?? 'bg-teal-600/20 text-teal-400';
 }
 
 // ─── Time helpers ──────────────────────────────────────────────────────────────
@@ -72,33 +103,29 @@ export function todayStr(): string {
   return new Date().toISOString().split('T')[0];
 }
 
-/** Returns current HH:mm */
-export function currentTimeStr(): string {
-  const now = new Date();
-  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+/** Convierte HH:mm (24h) a formato 12h sin AM/PM, ej: "13:00" → "1:00" */
+export function formatTo12h(time: string): string {
+  const [h, m] = time.split(':').map(Number);
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, '0')}`;
 }
 
-/** Formats a Date object as HH:MM:SS */
+/** Formats a Date object as h:mm:ss (12h sin AM/PM) */
 export function formatTimeFull(date: Date): string {
-  return date.toLocaleTimeString('es-ES', {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  });
+  const h = date.getHours() % 12 || 12;
+  const m = String(date.getMinutes()).padStart(2, '0');
+  const s = String(date.getSeconds()).padStart(2, '0');
+  return `${h}:${m}:${s}`;
 }
 
-/** Formats a Date object as HH:MM */
-export function formatTimeShort(date: Date): string {
-  return date.toLocaleTimeString('es-ES', {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-/** Formats seconds as MM:SS */
+/** Formats seconds as MM:SS or H:MM:SS when ≥ 60 min */
 export function formatCountdown(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
+  const hrs = Math.floor(seconds / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
   const secs = seconds % 60;
+  if (hrs > 0) {
+    return `${hrs}:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  }
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
@@ -128,7 +155,6 @@ export function durationBetween(start: string, end: string): number {
  * Devuelve el nuevo string en formato YYYY-MM-DDTHH:mm.
  */
 export function addMinutesToDatetime(datetimeStr: string, minutes: number): string {
-  // Parsear correctamente sin importar si tiene hora o no
   const date = datetimeStr.includes('T')
     ? new Date(datetimeStr)
     : new Date(datetimeStr + 'T00:00:00');
@@ -146,9 +172,9 @@ export function formatDateDisplay(dateStr: string, options?: Intl.DateTimeFormat
   const hasTime = dateStr.includes('T') && dateStr.length > 10;
   const date = hasTime ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
   const dateOptions = options ?? { weekday: 'short', day: 'numeric', month: 'short' };
-  const formatted = date.toLocaleDateString('es-ES', dateOptions);
+  const formatted = date.toLocaleDateString('es-CO', dateOptions);
   if (hasTime) {
-    const timeStr = date.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    const timeStr = date.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true });
     return `${formatted}, ${timeStr}`;
   }
   return formatted;

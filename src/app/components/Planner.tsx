@@ -1,30 +1,36 @@
 import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
-import { Block, Task } from '../lib/types';
+import { Block, Task, TaskStatus, Subtask } from '../lib/types';
 import { classifyTasksWithAI, ParsedItem } from '../lib/ai-classifier';
 import {
   getBlockColor,
   getBlockLabel,
   getBlockStatusLabel,
   getDifficultyLabel,
+  getTaskStatusLabel,
+  getTaskStatusColor,
+  getCategoryColor,
+  formatTo12h,
   addMinutesToTime,
   addMinutesToDatetime,
   durationBetween,
   todayStr,
   formatDateDisplay,
 } from '../lib/helpers';
-import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check } from 'lucide-react';
 
 export function Planner() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [allTasks, setAllTasks] = useState<Task[]>([]);
   const [showAddBlock, setShowAddBlock] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
   const [showDailySetup, setShowDailySetup] = useState(false);
   const [activeTab, setActiveTab] = useState<'blocks' | 'tasks'>('blocks');
   const [editingBlock, setEditingBlock] = useState<Block | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [showSmartImport, setShowSmartImport] = useState(false);
   const [smartText, setSmartText] = useState('');
   const [smartItems, setSmartItems] = useState<ParsedItem[] | null>(null);
@@ -33,68 +39,42 @@ export function Planner() {
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
-    setTasks(store.getTasks());
+    setTasks(store.getTasksForDayWithCarryOver(selectedDate));
+    setAllTasks(
+      store.getTasks()
+        .filter(t => t.status !== 'terminada')
+        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    );
+
+    // Programar notificaciones para entregables
+    if (notificationService.hasPermission()) {
+      store.getTasksForDayWithCarryOver(selectedDate)
+        .filter(t => t.isDeliverable && t.status !== 'terminada' && t.status !== 'aplazada')
+        .forEach(t => notificationService.scheduleDeliverableNotifications(t));
+    }
   };
 
   useEffect(() => {
     refreshData();
-    const today = todayStr();
-    if (selectedDate === today && store.getBlocks(selectedDate).length === 0) {
-      setShowDailySetup(true);
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
   // ─── Daily Setup ──────────────────────────────────────────────────────────────
 
-  const handleDailySetup = (count: number) => {
-    const settings = store.getSettings();
-    const createdBlocks: Block[] = [];
-    const [arrH, arrM] = settings.arrivalTime.split(':').map(Number);
-    const arrivalMins = arrH * 60 + arrM;
+  const handleDailySetup = () => {
+    // Generar rutina diaria desde plantilla
+    const templateBlocks = store.generateFromTemplate(selectedDate);
 
-    for (let i = 0; i < count; i++) {
-      const blockStartMins = arrivalMins + i * (settings.deepBlockDuration + 10);
-      const startH = Math.floor(blockStartMins / 60);
-      const startM = blockStartMins % 60;
-      const startTime = `${String(startH).padStart(2, '0')}:${String(startM).padStart(2, '0')}`;
-      const endTime = addMinutesToTime(startTime, settings.deepBlockDuration);
-
-      const block: Block = {
-        id: crypto.randomUUID(),
-        type: 'deep',
-        priority: 'high',
-        duration: settings.deepBlockDuration,
-        startTime,
-        endTime,
-        status: 'pending',
-        date: selectedDate,
-        interruptions: 0,
-      };
-      store.addBlock(block);
-      createdBlocks.push(block);
-
-      if (i === 0 && settings.exerciseMandatory) {
-        const exStart = addMinutesToTime(endTime, 5);
-        const exEnd = addMinutesToTime(exStart, settings.exerciseDuration);
-        const exerciseBlock: Block = {
-          id: crypto.randomUUID(),
-          type: 'exercise',
-          priority: 'high',
-          duration: settings.exerciseDuration,
-          startTime: exStart,
-          endTime: exEnd,
-          status: 'pending',
-          date: selectedDate,
-          interruptions: 0,
-        };
-        store.addBlock(exerciseBlock);
-        createdBlocks.push(exerciseBlock);
+    // Si la plantilla no generó bloques (ya existen), generar para tareas sin asignar
+    if (templateBlocks.length === 0) {
+      const taskBlocks = store.generateBlocksFromTasks(selectedDate);
+      if (notificationService.hasPermission()) {
+        taskBlocks.forEach(b => notificationService.scheduleBlockNotifications(b));
       }
-    }
-
-    if (notificationService.hasPermission()) {
-      createdBlocks.forEach(b => notificationService.scheduleBlockNotifications(b));
+    } else {
+      if (notificationService.hasPermission()) {
+        templateBlocks.forEach(b => notificationService.scheduleBlockNotifications(b));
+      }
     }
 
     refreshData();
@@ -107,58 +87,70 @@ export function Planner() {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
+    const isDeliverable = fd.get('isDeliverable') === 'on';
+    // Parse subtasks from comma-separated input
+    const subtasksRaw = (fd.get('subtasks') as string ?? '').trim();
+    const subtasks: Subtask[] = subtasksRaw
+      ? subtasksRaw.split('\n').map(s => s.trim()).filter(Boolean).map(title => ({
+          id: crypto.randomUUID(),
+          title,
+          done: false,
+        }))
+      : [];
     const task: Task = {
       id: crypto.randomUUID(),
       subject: fd.get('subject') as string,
       description: fd.get('description') as string,
       notes: fd.get('notes') as string,
+      category: (fd.get('category') as string || '').trim() || undefined,
+      subtasks: subtasks.length > 0 ? subtasks : undefined,
       dueDate: fd.get('dueDate') as string,
       difficulty: fd.get('difficulty') as Task['difficulty'],
-      status: 'pending',
+      status: 'sin-iniciar',
+      isDeliverable,
       createdAt: new Date().toISOString(),
     };
     store.addTask(task);
 
-    // Auto-crear bloque si el checkbox está marcado
-    if (fd.get('autoBlock') === 'on') {
-      const blockDate = task.dueDate.split('T')[0]; // YYYY-MM-DD
-      const settings = store.getSettings();
-      const existingBlocks = store.getBlocks(blockDate)
-        .sort((a, b) => a.endTime.localeCompare(b.endTime));
+    // Auto-crear bloque para la tarea
+    const blockDate = task.dueDate.split('T')[0];
+    const settings = store.getSettings();
+    const existingBlocks = store.getBlocks(blockDate)
+      .sort((a, b) => a.endTime.localeCompare(b.endTime));
 
-      // Primer slot disponible: después del último bloque + 10 min, o a la hora de llegada
-      const startTime = existingBlocks.length > 0
-        ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
-        : settings.arrivalTime;
+    const startTime = existingBlocks.length > 0
+      ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
+      : settings.arrivalTime;
 
-      const duration = task.difficulty === 'high' ? 90
-        : task.difficulty === 'medium' ? 60 : 45;
-      const endTime = addMinutesToTime(startTime, duration);
-      const priority = task.difficulty === 'high' ? 'high'
-        : task.difficulty === 'medium' ? 'medium' : 'low';
+    const duration = task.difficulty === 'high' ? 90
+      : task.difficulty === 'medium' ? 60 : 45;
+    const endTime = addMinutesToTime(startTime, duration);
+    const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
+      : task.difficulty === 'medium' ? 'medium' : 'low';
 
-      const block: Block = {
-        id: crypto.randomUUID(),
-        type: 'deep',
-        priority,
-        taskId: task.id,
-        task,
-        duration,
-        startTime,
-        endTime,
-        status: 'pending',
-        date: blockDate,
-        interruptions: 0,
-      };
+    const block: Block = {
+      id: crypto.randomUUID(),
+      type: 'deep',
+      priority,
+      taskId: task.id,
+      task,
+      duration,
+      startTime,
+      endTime,
+      status: 'pending',
+      date: blockDate,
+      interruptions: 0,
+    };
 
-      if (notificationService.hasPermission()) {
-        notificationService.scheduleBlockNotifications(block);
+    if (notificationService.hasPermission()) {
+      notificationService.scheduleBlockNotifications(block);
+      if (isDeliverable) {
+        notificationService.scheduleDeliverableNotifications(task);
       }
-      store.addBlock(block);
-
-      // Cambiar a pestaña de bloques si el bloque es del día seleccionado
-      if (blockDate === selectedDate) setActiveTab('blocks');
     }
+    store.addBlock(block);
+
+    if (blockDate === selectedDate) setActiveTab('blocks');
 
     refreshData();
     setShowAddTask(false);
@@ -167,17 +159,83 @@ export function Planner() {
 
   const deleteTask = (id: string) => {
     if (confirm('¿Eliminar esta tarea? Los bloques asociados quedarán sin tarea.')) {
+      notificationService.cancelTaskNotifications(id);
       store.deleteTask(id);
       refreshData();
     }
   };
 
   const postponeTask = (id: string, minutes: number) => {
-    const task = tasks.find(t => t.id === id);
+    const task = store.getTask(id);
     if (!task) return;
     const newDueDate = addMinutesToDatetime(task.dueDate, minutes);
-    store.updateTask(id, { dueDate: newDueDate });
+    const newStatus: TaskStatus = task.status === 'en-progreso'
+      ? 'en-progreso-aplazada'
+      : task.status === 'en-progreso-aplazada'
+        ? 'en-progreso-aplazada'
+        : 'aplazada';
+    store.updateTask(id, { dueDate: newDueDate, status: newStatus });
+    notificationService.cancelTaskNotifications(id);
+    // Re-programar notificaciones si es entregable
+    if (task.isDeliverable) {
+      const updated = store.getTask(id);
+      if (updated) notificationService.scheduleDeliverableNotifications(updated);
+    }
     refreshData();
+  };
+
+  const changeTaskStatus = (id: string, status: TaskStatus) => {
+    const updates: Partial<Task> = { status };
+    if (status === 'terminada') {
+      updates.completedAt = new Date().toISOString();
+      notificationService.cancelTaskNotifications(id);
+    }
+    store.updateTask(id, updates);
+    refreshData();
+  };
+
+  const saveEditTask = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editingTask) return;
+    const fd = new FormData(e.currentTarget);
+    const isDeliverable = fd.get('isDeliverable') === 'on';
+    const newDueDate = fd.get('dueDate') as string;
+    const subtasksRaw = (fd.get('subtasks') as string ?? '').trim();
+    // Preserve existing subtask done state when editing
+    const existingSubtasks = editingTask.subtasks ?? [];
+    let subtasks: Subtask[] | undefined;
+    if (subtasksRaw) {
+      const newTitles = subtasksRaw.split('\n').map(s => s.trim()).filter(Boolean);
+      subtasks = newTitles.map(title => {
+        const existing = existingSubtasks.find(s => s.title === title);
+        return existing ?? { id: crypto.randomUUID(), title, done: false };
+      });
+    } else {
+      subtasks = undefined;
+    }
+    const updates: Partial<Task> = {
+      subject: fd.get('subject') as string,
+      description: fd.get('description') as string,
+      notes: fd.get('notes') as string,
+      category: (fd.get('category') as string || '').trim() || undefined,
+      subtasks,
+      dueDate: newDueDate,
+      difficulty: fd.get('difficulty') as Task['difficulty'],
+      isDeliverable,
+    };
+    store.updateTask(editingTask.id, updates);
+
+    // Re-programar notificaciones si es entregable
+    notificationService.cancelTaskNotifications(editingTask.id);
+    if (isDeliverable && notificationService.hasPermission()) {
+      const updated = store.getTask(editingTask.id);
+      if (updated && updated.status !== 'terminada' && updated.status !== 'aplazada') {
+        notificationService.scheduleDeliverableNotifications(updated);
+      }
+    }
+
+    refreshData();
+    setEditingTask(null);
   };
 
   // ─── Add Block ───────────────────────────────────────────────────────────────
@@ -201,6 +259,7 @@ export function Planner() {
     const block: Block = {
       id: crypto.randomUUID(),
       type: fd.get('type') as Block['type'],
+      label: (fd.get('label') as string) || undefined,
       priority: fd.get('priority') as Block['priority'],
       taskId,
       task,
@@ -242,15 +301,18 @@ export function Planner() {
 
     const taskId = fd.get('taskId') as string || undefined;
     const task = taskId ? tasks.find(t => t.id === taskId) : undefined;
+    const status = (fd.get('status') as Block['status']) ?? editingBlock.status;
 
     store.updateBlock(editingBlock.id, {
       type: fd.get('type') as Block['type'],
+      label: (fd.get('label') as string) || undefined,
       priority: fd.get('priority') as Block['priority'],
       taskId,
       task,
       startTime,
       endTime,
       duration,
+      status,
     });
     refreshData();
     setEditingBlock(null);
@@ -283,18 +345,26 @@ export function Planner() {
 
     smartItems.forEach((item, idx) => {
       if (!smartSelected[idx]) return;
+      const dueDate = item.dueDate ?? selectedDate;
       const task: Task = {
         id: crypto.randomUUID(),
         subject: item.subject,
         description: item.description,
         notes: '',
-        dueDate: item.dueDate ?? selectedDate,
+        dueDate,
         difficulty: item.difficulty,
-        status: 'pending',
+        status: 'sin-iniciar',
+        isDeliverable: item.isDeliverable ?? false,
         createdAt: new Date().toISOString(),
       };
       store.addTask(task);
 
+      // Schedule deliverable notifications
+      if (task.isDeliverable && notificationService.hasPermission()) {
+        notificationService.scheduleDeliverableNotifications(task);
+      }
+
+      const blockDate = dueDate.split('T')[0];
       const startTime = lastEnd;
       const endTime = addMinutesToTime(startTime, item.estimatedMinutes);
       const block: Block = {
@@ -307,7 +377,7 @@ export function Planner() {
         startTime,
         endTime,
         status: 'pending',
-        date: selectedDate,
+        date: blockDate,
         interruptions: 0,
       };
       if (notificationService.hasPermission()) {
@@ -323,7 +393,7 @@ export function Planner() {
     setSmartItems(null);
     setSmartSelected([]);
     setActiveTab('blocks');
-  }; ──────────────────────────────────────────────────────────────────
+  };
 
   const isToday = selectedDate === todayStr();
 
@@ -373,25 +443,23 @@ export function Planner() {
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full space-y-5">
             <div>
-              <h3 className="text-xl font-bold">Configurar Día</h3>
-              <p className="text-zinc-400 text-sm mt-1">¿Cuántos bloques profundos quieres hoy?</p>
+              <h3 className="text-xl font-bold">Generar Rutina Diaria</h3>
+              <p className="text-zinc-400 text-sm mt-1">
+                Se creará tu rutina completa: despertar, estudio, SENA, bloques profundos,
+                ejercicio, revisión y descansos. Las tareas se asignarán automáticamente a los bloques de trabajo.
+              </p>
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              {[1, 2, 3].map((count) => (
-                <button
-                  key={count}
-                  onClick={() => handleDailySetup(count)}
-                  className="py-8 bg-red-600 hover:bg-red-700 rounded-xl font-bold text-3xl transition-all active:scale-95"
-                >
-                  {count}
-                </button>
-              ))}
-            </div>
+            <button
+              onClick={() => { handleDailySetup(); setShowDailySetup(false); }}
+              className="w-full py-4 bg-red-600 hover:bg-red-700 rounded-xl font-bold text-lg transition-all active:scale-95"
+            >
+              Generar Automáticamente
+            </button>
             <button
               onClick={() => setShowDailySetup(false)}
               className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
             >
-              Configurar Manualmente
+              Cancelar
             </button>
           </div>
         </div>
@@ -403,6 +471,20 @@ export function Planner() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Bloques del Día</h2>
             <div className="flex gap-2">
+              {blocks.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (confirm(`¿Eliminar todos los bloques del ${formatDateDisplay(selectedDate)}?`)) {
+                      notificationService.cancelAllNotifications();
+                      store.deleteAllBlocksForDate(selectedDate);
+                      refreshData();
+                    }
+                  }}
+                  className="px-3 py-2 bg-red-900/50 hover:bg-red-800/60 text-red-400 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                >
+                  <Trash2 className="size-3.5" /> Borrar todo
+                </button>
+              )}
               <button
                 onClick={() => setShowDailySetup(true)}
                 className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-semibold transition-colors"
@@ -431,7 +513,7 @@ export function Planner() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm">{getBlockLabel(block.type)}</span>
+                        <span className="font-semibold text-sm">{block.label || getBlockLabel(block.type)}</span>
                         {block.status !== 'pending' && (
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             block.status === 'completed' ? 'bg-green-600/30 text-green-300' :
@@ -448,10 +530,17 @@ export function Planner() {
                         )}
                       </div>
                       {block.task && (
-                        <div className="text-sm mt-1 truncate opacity-90">{block.task.subject}</div>
+                        <div className="text-sm mt-1 truncate opacity-90">
+                          {block.task.subject}
+                          {block.task.isDeliverable && (
+                            <span className="ml-1.5 text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400 inline-flex items-center gap-0.5">
+                              <Package className="size-3" /> Entregable
+                            </span>
+                          )}
+                        </div>
                       )}
                       <div className="text-xs opacity-60 mt-1">
-                        {block.startTime} – {block.endTime} · {block.duration} min
+                        {formatTo12h(block.startTime)} – {formatTo12h(block.endTime)} · {block.duration} min
                       </div>
                     </div>
                     <div className="flex gap-1 flex-shrink-0">
@@ -486,6 +575,20 @@ export function Planner() {
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Tareas</h2>
             <div className="flex gap-2">
+              {allTasks.length > 0 && (
+                <button
+                  onClick={() => {
+                    if (confirm('¿Eliminar TODAS las tareas? Esta acción no se puede deshacer.')) {
+                      notificationService.cancelAllNotifications();
+                      store.deleteAllTasks();
+                      refreshData();
+                    }
+                  }}
+                  className="px-3 py-2 bg-red-900/50 hover:bg-red-800/60 text-red-400 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                >
+                  <Trash2 className="size-3.5" /> Borrar todo
+                </button>
+              )}
               <button
                 onClick={() => { setSmartItems(null); setSmartText(''); setShowSmartImport(true); }}
                 className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-xs font-semibold transition-colors"
@@ -502,29 +605,59 @@ export function Planner() {
             </div>
           </div>
 
-          {tasks.length === 0 ? (
+          {allTasks.length === 0 ? (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center text-zinc-500 space-y-2">
               <BookOpen className="size-8 mx-auto opacity-40" />
               <p className="text-sm">Sin tareas registradas</p>
             </div>
           ) : (
             <div className="space-y-2">
-              {tasks.map((task) => (
-                <div key={task.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 space-y-2">
+              {allTasks.map((task) => {
+                const isOverdue = task.dueDate.split('T')[0] < todayStr();
+                return (
+                <div key={task.id} className={`bg-zinc-900 border rounded-xl p-4 space-y-2 ${
+                  isOverdue ? 'border-red-600/40' : 'border-zinc-800'
+                }`}>
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
-                      <div className="font-semibold truncate">{task.subject}</div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold truncate">{task.subject}</span>
+                        {task.isDeliverable && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400 flex items-center gap-0.5 flex-shrink-0">
+                            <Package className="size-3" /> Entregable
+                          </span>
+                        )}
+                        {isOverdue && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-400 flex-shrink-0">
+                            Vencida
+                          </span>
+                        )}
+                      </div>
+                      {task.category && (
+                        <span className={`text-xs px-1.5 py-0.5 rounded-full flex items-center gap-0.5 flex-shrink-0 ${getCategoryColor(task.category)}`}>
+                          <FolderOpen className="size-3" /> {task.category}
+                        </span>
+                      )}
                       {task.description && (
                         <div className="text-sm text-zinc-400 mt-0.5 line-clamp-2">{task.description}</div>
                       )}
                     </div>
-                    <button
-                      onClick={() => deleteTask(task.id)}
-                      className="p-1.5 hover:bg-white/10 rounded-lg transition-colors flex-shrink-0 text-zinc-500 hover:text-red-400"
-                      aria-label="Eliminar tarea"
-                    >
-                      <Trash2 className="size-4" />
-                    </button>
+                    <div className="flex gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => setEditingTask(task)}
+                        className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-zinc-500 hover:text-blue-400"
+                        aria-label="Editar tarea"
+                      >
+                        <Pencil className="size-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteTask(task.id)}
+                        className="p-1.5 hover:bg-white/10 rounded-lg transition-colors text-zinc-500 hover:text-red-400"
+                        aria-label="Eliminar tarea"
+                      >
+                        <Trash2 className="size-4" />
+                      </button>
+                    </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="flex items-center gap-1 text-zinc-400">
@@ -538,16 +671,23 @@ export function Planner() {
                     }`}>
                       {getDifficultyLabel(task.difficulty)}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full ${
-                      task.status === 'completed' ? 'bg-green-600/20 text-green-400' :
-                      task.status === 'in-progress' ? 'bg-blue-600/20 text-blue-400' :
-                      'bg-zinc-600/20 text-zinc-400'
-                    }`}>
-                      {task.status === 'completed' ? 'Completada' :
-                       task.status === 'in-progress' ? 'En curso' : 'Pendiente'}
-                    </span>
+                    {/* Status dropdown */}
+                    <div className="relative">
+                      <select
+                        value={task.status}
+                        onChange={(e) => changeTaskStatus(task.id, e.target.value as TaskStatus)}
+                        className={`appearance-none pl-2 pr-6 py-0.5 rounded-full text-xs font-medium cursor-pointer border-0 focus:outline-none focus:ring-1 focus:ring-white/20 ${getTaskStatusColor(task.status)}`}
+                      >
+                        <option value="sin-iniciar">Sin iniciar</option>
+                        <option value="en-progreso">En progreso</option>
+                        <option value="en-progreso-aplazada">En progreso (aplazada)</option>
+                        <option value="aplazada">Aplazada</option>
+                        <option value="terminada">Terminada</option>
+                      </select>
+                      <ChevronDown className="size-3 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
+                    </div>
                   </div>
-                  {task.status !== 'completed' && (
+                  {task.status !== 'terminada' && (
                     <div className="flex items-center gap-2 pt-1">
                       <span className="text-xs text-zinc-600">Aplazar:</span>
                       <button
@@ -562,10 +702,61 @@ export function Planner() {
                       >
                         +1 hora
                       </button>
+                      <button
+                        onClick={() => postponeTask(task.id, 1440)}
+                        className="text-xs px-2 py-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg transition-colors text-zinc-300"
+                      >
+                        +1 día
+                      </button>
                     </div>
                   )}
+                  {task.completedAt && (
+                    <div className="text-xs text-zinc-600">
+                      Completada: {formatDateDisplay(task.completedAt)}
+                    </div>
+                  )}
+                  {/* Subtask progress */}
+                  {task.subtasks && task.subtasks.length > 0 && (() => {
+                    const done = task.subtasks.filter(s => s.done).length;
+                    const total = task.subtasks.length;
+                    const pct = Math.round((done / total) * 100);
+                    return (
+                      <div className="space-y-1.5 pt-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="flex items-center gap-1 text-zinc-400">
+                            <ListChecks className="size-3" /> Pasos
+                          </span>
+                          <span className="text-zinc-500">{done}/{total} ({pct}%)</span>
+                        </div>
+                        <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                          <div className="h-full bg-emerald-500 rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
+                        </div>
+                        <div className="space-y-1">
+                          {task.subtasks.map(sub => (
+                            <label key={sub.id} className="flex items-center gap-2 text-xs cursor-pointer group">
+                              <button
+                                type="button"
+                                onClick={() => { store.toggleSubtask(task.id, sub.id); refreshData(); }}
+                                className={`size-4 rounded flex items-center justify-center border transition-colors flex-shrink-0 ${
+                                  sub.done
+                                    ? 'bg-emerald-600 border-emerald-500 text-white'
+                                    : 'border-zinc-600 hover:border-zinc-500 text-transparent'
+                                }`}
+                              >
+                                <Check className="size-3" />
+                              </button>
+                              <span className={sub.done ? 'line-through text-zinc-600' : 'text-zinc-300 group-hover:text-white'}>
+                                {sub.title}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -596,6 +787,18 @@ export function Planner() {
                   placeholder="Recursos, URLs, contexto extra..." />
               </div>
               <div>
+                <label className="block text-sm text-zinc-400 mb-2">Categoría</label>
+                <input type="text" name="category"
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Ej: Java, JavaScript, SQL, React..." />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Sub-pasos (uno por línea)</label>
+                <textarea name="subtasks" rows={3}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  placeholder={"Investigar el tema\nHacer la estructura\nCodificar la solución\nProbar y depurar"} />
+              </div>
+              <div>
                 <label className="block text-sm text-zinc-400 mb-2">Fecha y hora de entrega *</label>
                 <input type="datetime-local" name="dueDate" required
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 [color-scheme:dark]" />
@@ -609,15 +812,16 @@ export function Planner() {
                   <option value="high">Alta</option>
                 </select>
               </div>
-              {/* Auto-crear bloque */}
+              {/* Marcar como entregable */}
               <label className="flex items-start gap-3 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3 cursor-pointer hover:bg-zinc-800 transition-colors">
-                <input type="checkbox" name="autoBlock" defaultChecked
-                  className="mt-0.5 size-4 rounded accent-blue-500 cursor-pointer" />
+                <input type="checkbox" name="isDeliverable"
+                  className="mt-0.5 size-4 rounded accent-purple-500 cursor-pointer" />
                 <div>
-                  <p className="text-sm font-medium text-white">Crear bloque automáticamente</p>
+                  <p className="text-sm font-medium text-white flex items-center gap-1.5">
+                    <Package className="size-4 text-purple-400" /> Marcar como entregable
+                  </p>
                   <p className="text-xs text-zinc-500 mt-0.5">
-                    Añade un bloque profundo en la fecha de entrega.<br/>
-                    Baja: 45 min · Media: 60 min · Alta: 90 min
+                    Tendrá prioridad máxima. Recibirás alertas 8h antes y cada 2h hasta la entrega.
                   </p>
                 </div>
               </label>
@@ -638,6 +842,12 @@ export function Planner() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold mb-5">Nuevo Bloque</h3>
             <form onSubmit={addBlock} className="space-y-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Nombre (opcional)</label>
+                <input type="text" name="label"
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="Ej: Bloque profundo 1, Descanso..." />
+              </div>
               <div>
                 <label className="block text-sm text-zinc-400 mb-2">Tipo</label>
                 <select name="type"
@@ -789,9 +999,16 @@ export function Planner() {
                           <span className="text-xs px-1.5 py-0.5 rounded-full bg-zinc-700/50 text-zinc-400">
                             {item.estimatedMinutes} min
                           </span>
+                          {item.isDeliverable && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400 flex items-center gap-0.5">
+                              <Package className="size-3" /> Entregable
+                            </span>
+                          )}
                           {item.dueDate && (
-                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400">
-                              {item.dueDate}
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-cyan-600/20 text-cyan-400">
+                              {item.dueDate.includes('T')
+                                ? formatDateDisplay(item.dueDate)
+                                : formatDateDisplay(item.dueDate + 'T00:00')}
                             </span>
                           )}
                         </div>
@@ -820,15 +1037,99 @@ export function Planner() {
         </div>
       )}
 
+      {/* ── Edit Task Modal ── */}
+      {editingTask && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-bold mb-1">Editar Tarea</h3>
+            <p className="text-zinc-500 text-sm mb-5">
+              {editingTask.subject} · {formatDateDisplay(editingTask.dueDate)}
+            </p>
+            <form onSubmit={saveEditTask} className="space-y-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Materia / Título *</label>
+                <input type="text" name="subject" required defaultValue={editingTask.subject}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Descripción</label>
+                <textarea name="description" rows={2} defaultValue={editingTask.description}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Notas adicionales</label>
+                <textarea name="notes" rows={2} defaultValue={editingTask.notes ?? ''}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Categoría</label>
+                <input type="text" name="category" defaultValue={editingTask.category ?? ''}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Ej: Java, JavaScript, SQL, React..." />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Sub-pasos (uno por línea)</label>
+                <textarea name="subtasks" rows={3}
+                  defaultValue={editingTask.subtasks?.map(s => s.title).join('\n') ?? ''}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                  placeholder={"Investigar el tema\nHacer la estructura\nCodificar la solución\nProbar y depurar"} />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Fecha y hora de entrega *</label>
+                <input type="datetime-local" name="dueDate" required defaultValue={editingTask.dueDate}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 [color-scheme:dark]" />
+              </div>
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Dificultad</label>
+                <select name="difficulty" defaultValue={editingTask.difficulty}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="low">Baja</option>
+                  <option value="medium">Media</option>
+                  <option value="high">Alta</option>
+                </select>
+              </div>
+              <label className="flex items-start gap-3 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3 cursor-pointer hover:bg-zinc-800 transition-colors">
+                <input type="checkbox" name="isDeliverable" defaultChecked={editingTask.isDeliverable ?? false}
+                  className="mt-0.5 size-4 rounded accent-purple-500 cursor-pointer" />
+                <div>
+                  <p className="text-sm font-medium text-white flex items-center gap-1.5">
+                    <Package className="size-4 text-purple-400" /> Marcar como entregable
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-0.5">
+                    Tendrá prioridad máxima con alertas automáticas.
+                  </p>
+                </div>
+              </label>
+              <div className="flex gap-3 pt-1">
+                <button type="button" onClick={() => setEditingTask(null)}
+                  className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold transition-colors">
+                  Cancelar
+                </button>
+                <button type="submit"
+                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold transition-colors">
+                  Guardar
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── Edit Block Modal ── */}
       {editingBlock && (
         <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold mb-1">Editar Bloque</h3>
             <p className="text-zinc-500 text-sm mb-5">
-              {getBlockLabel(editingBlock.type)} · {editingBlock.startTime}–{editingBlock.endTime}
+              {editingBlock.label || getBlockLabel(editingBlock.type)} · {formatTo12h(editingBlock.startTime)}–{formatTo12h(editingBlock.endTime)}
             </p>
             <form onSubmit={saveEditBlock} className="space-y-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Nombre</label>
+                <input type="text" name="label" defaultValue={editingBlock.label ?? ''}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                  placeholder="Ej: Bloque profundo 1..." />
+              </div>
               <div>
                 <label className="block text-sm text-zinc-400 mb-2">Tipo</label>
                 <select name="type" defaultValue={editingBlock.type}
@@ -875,9 +1176,6 @@ export function Planner() {
                   <label className="block text-sm text-zinc-400 mb-2">Estado</label>
                   <select name="status" defaultValue={editingBlock.status}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500"
-                    onChange={(ev) => {
-                      store.updateBlock(editingBlock.id, { status: ev.target.value as Block['status'] });
-                    }}
                   >
                     <option value="pending">Pendiente</option>
                     <option value="active">Activo</option>

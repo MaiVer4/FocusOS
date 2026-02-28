@@ -6,6 +6,7 @@ import {
   getBlockGradient,
   getBlockLabel,
   formatCountdown,
+  formatTo12h,
 } from '../lib/helpers';
 import { X, CheckCircle2, XCircle, AlertTriangle, Timer } from 'lucide-react';
 
@@ -32,7 +33,13 @@ export function Focus() {
 
     const rem = calcRemaining();
     setTimeRemaining(rem);
-    if (rem === 0) setBlockFinished(true);
+    if (rem === 0) {
+      setBlockFinished(true);
+      // Auto-complete rest blocks silently
+      if (block.type === 'rest') {
+        store.updateBlock(block.id, { status: 'completed' });
+      }
+    }
 
     const interval = setInterval(() => {
       const remaining = calcRemaining();
@@ -40,6 +47,10 @@ export function Focus() {
       if (remaining === 0) {
         setBlockFinished(true);
         clearInterval(interval);
+        // Auto-complete rest blocks silently
+        if (block.type === 'rest') {
+          store.updateBlock(block.id, { status: 'completed' });
+        }
       }
     }, 1000);
 
@@ -116,7 +127,7 @@ export function Focus() {
       {/* Header */}
       <div className="p-6 flex items-center justify-between">
         <div className="text-sm font-bold uppercase tracking-widest opacity-80">
-          {getBlockLabel(currentBlock.type)}
+          {currentBlock.label || getBlockLabel(currentBlock.type)}
         </div>
         <button
           onClick={handleExit}
@@ -135,7 +146,7 @@ export function Focus() {
             {formatCountdown(timeRemaining)}
           </div>
           <div className="text-sm text-zinc-400">
-            {currentBlock.startTime} – {currentBlock.endTime}
+            {formatTo12h(currentBlock.startTime)} – {formatTo12h(currentBlock.endTime)}
           </div>
           {blockFinished && (
             <div className="text-green-400 font-semibold animate-pulse">¡Tiempo completado!</div>
@@ -190,20 +201,31 @@ export function Focus() {
 
       {/* Action Buttons */}
       <div className="p-6 space-y-3">
-        <button
-          onClick={handleComplete}
-          className="w-full py-5 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-all active:scale-95"
-        >
-          <CheckCircle2 className="size-6" />
-          Cumplido
-        </button>
-        <button
-          onClick={handleFail}
-          className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-base flex items-center justify-center gap-2 transition-all active:scale-95"
-        >
-          <XCircle className="size-5" />
-          Fallé
-        </button>
+        {currentBlock.type === 'rest' ? (
+          <button
+            onClick={() => navigate('/')}
+            className="w-full py-5 bg-zinc-700 hover:bg-zinc-600 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-all active:scale-95"
+          >
+            Volver
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={handleComplete}
+              className="w-full py-5 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-lg flex items-center justify-center gap-2 transition-all active:scale-95"
+            >
+              <CheckCircle2 className="size-6" />
+              Cumplido
+            </button>
+            <button
+              onClick={handleFail}
+              className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-base flex items-center justify-center gap-2 transition-all active:scale-95"
+            >
+              <XCircle className="size-5" />
+              Fallé
+            </button>
+          </>
+        )}
       </div>
 
       {/* Exit Warning Modal */}

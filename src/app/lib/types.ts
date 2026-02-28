@@ -2,23 +2,34 @@ export type BlockType = 'deep' | 'light' | 'exercise' | 'rest';
 export type BlockPriority = 'high' | 'medium' | 'low';
 export type BlockStatus = 'pending' | 'active' | 'completed' | 'failed';
 export type Difficulty = 'high' | 'medium' | 'low';
-export type TaskStatus = 'pending' | 'in-progress' | 'completed';
+export type TaskStatus = 'sin-iniciar' | 'en-progreso' | 'en-progreso-aplazada' | 'aplazada' | 'terminada';
 export type PeakEnergyTime = 'morning' | 'afternoon' | 'night';
+
+export interface Subtask {
+  id: string;
+  title: string;
+  done: boolean;
+}
 
 export interface Task {
   id: string;
   subject: string;
   description: string;
   notes?: string;
-  dueDate: string; // ISO datetime string YYYY-MM-DDTHH:mm (hora opcional)
+  category?: string;       // ej: "Java", "JavaScript", "Bases de datos"
+  subtasks?: Subtask[];    // pasos del proyecto, se completan bloque a bloque
+  dueDate: string;
   difficulty: Difficulty;
   status: TaskStatus;
-  createdAt: string; // ISO date string
+  isDeliverable?: boolean;
+  createdAt: string;
+  completedAt?: string;
 }
 
 export interface Block {
   id: string;
   type: BlockType;
+  label?: string;
   priority: BlockPriority;
   taskId?: string;
   duration: number; // in minutes

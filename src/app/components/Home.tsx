@@ -6,6 +6,7 @@ import {
   getBlockSolidColor,
   getBlockLabel,
   formatTimeFull,
+  formatTo12h,
   scoreColor,
   todayStr,
 } from '../lib/helpers';
@@ -111,7 +112,7 @@ export function Home() {
           >
             <div className="flex items-start justify-between mb-3">
               <div>
-                <div className="text-xs font-semibold opacity-80 uppercase tracking-wider">{getBlockLabel(currentBlock.type)}</div>
+                <div className="text-xs font-semibold opacity-80 uppercase tracking-wider">{currentBlock.label || getBlockLabel(currentBlock.type)}</div>
                 <div className="text-2xl font-bold mt-1">
                   {currentBlock.task?.subject || 'Sin tarea asignada'}
                 </div>
@@ -119,7 +120,7 @@ export function Home() {
               <Timer className="size-6 opacity-80" />
             </div>
             <div className="flex items-center justify-between text-sm opacity-90">
-              <span>{currentBlock.startTime} – {currentBlock.endTime}</span>
+              <span>{formatTo12h(currentBlock.startTime)} – {formatTo12h(currentBlock.endTime)}</span>
               <span>{currentBlock.duration} min</span>
             </div>
           </button>
@@ -140,12 +141,12 @@ export function Home() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-xs text-zinc-500 uppercase tracking-wider">{getBlockLabel(nextBlock.type)}</div>
+                <div className="text-xs text-zinc-500 uppercase tracking-wider">{nextBlock.label || getBlockLabel(nextBlock.type)}</div>
                 <div className="text-lg font-semibold mt-0.5">
                   {nextBlock.task?.subject || 'Sin tarea asignada'}
                 </div>
                 <div className="text-sm text-zinc-500 mt-0.5">
-                  {nextBlock.startTime} – {nextBlock.endTime}
+                  {formatTo12h(nextBlock.startTime)} – {formatTo12h(nextBlock.endTime)}
                 </div>
               </div>
               <div className={`size-10 ${getBlockSolidColor(nextBlock.type)} rounded-xl flex-shrink-0`} />

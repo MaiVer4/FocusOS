@@ -1,12 +1,34 @@
-import { Block } from './types';
+import { Block, Task } from './types';
+import { getBlockLabel, formatTo12h } from './helpers';
 
 class NotificationService {
   private permission: NotificationPermission = 'default';
   private scheduledNotifications = new Map<string, number>();
+  private swRegistration: ServiceWorkerRegistration | null = null;
 
   constructor() {
     if ('Notification' in window) {
       this.permission = Notification.permission;
+    }
+    this.registerServiceWorker();
+  }
+
+  private async registerServiceWorker() {
+    if (!('serviceWorker' in navigator)) return;
+    try {
+      this.swRegistration = await navigator.serviceWorker.register('/sw.js');
+      // Esperar a que el SW esté activo
+      if (!this.swRegistration.active) {
+        await new Promise<void>((resolve) => {
+          const sw = this.swRegistration!.installing ?? this.swRegistration!.waiting;
+          if (!sw) { resolve(); return; }
+          sw.addEventListener('statechange', () => {
+            if (sw.state === 'activated') resolve();
+          });
+        });
+      }
+    } catch (error) {
+      console.warn('Error al registrar Service Worker:', error);
     }
   }
 
@@ -35,17 +57,27 @@ class NotificationService {
       return;
     }
 
+    const notifOptions: NotificationOptions = {
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [200, 100, 200],
+      ...options,
+    };
+
     try {
-      const notification = new Notification(title, {
-        icon: '/icon-192.png',
-        badge: '/icon-192.png',
-        vibrate: [200, 100, 200],
-        ...options,
-      });
+      // Intentar vía Service Worker (funciona en móvil)
+      if (this.swRegistration?.active) {
+        this.swRegistration.active.postMessage({
+          type: 'SHOW_NOTIFICATION',
+          title,
+          options: notifOptions,
+        });
+        return;
+      }
 
-      // Auto cerrar después de 10 segundos
+      // Fallback: Notification API directa (solo escritorio)
+      const notification = new Notification(title, notifOptions);
       setTimeout(() => notification.close(), 10000);
-
       return notification;
     } catch (error) {
       console.error('Error al enviar notificación:', error);
@@ -114,7 +146,7 @@ class NotificationService {
   }
 
   private sendBlockWarning(block: Block, minutesBefore: number) {
-    const blockLabel = this.getBlockLabel(block.type);
+    const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
       `⏰ ${blockLabel} en ${minutesBefore} minutos`,
       {
@@ -126,7 +158,7 @@ class NotificationService {
   }
 
   private sendBlockStart(block: Block) {
-    const blockLabel = this.getBlockLabel(block.type);
+    const blockLabel = getBlockLabel(block.type);
     let body = block.task?.subject || 'Es hora de comenzar';
     
     if (block.type === 'deep') {
@@ -145,7 +177,7 @@ class NotificationService {
   }
 
   private sendBlockMidpoint(block: Block) {
-    const blockLabel = this.getBlockLabel(block.type);
+    const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
       `⏱️ ${blockLabel} - Mitad del tiempo`,
       {
@@ -157,7 +189,7 @@ class NotificationService {
   }
 
   private sendBlockEnd(block: Block) {
-    const blockLabel = this.getBlockLabel(block.type);
+    const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
       `✅ ${blockLabel} - FINALIZADO`,
       {
@@ -170,7 +202,7 @@ class NotificationService {
   }
 
   private sendLateWarning(block: Block) {
-    const blockLabel = this.getBlockLabel(block.type);
+    const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
       `⚠️ BLOQUE RETRASADO`,
       {
@@ -178,58 +210,6 @@ class NotificationService {
         tag: `block-late-${block.id}`,
         requireInteraction: true,
         vibrate: [500, 200, 500, 200, 500],
-      }
-    );
-  }
-
-  sendInterruptionWarning() {
-    this.sendNotification(
-      '🚨 INTERRUPCIÓN DETECTADA',
-      {
-        body: 'Estás en un bloque profundo.\n\nSalir ahora afectará tu puntuación de disciplina.',
-        requireInteraction: true,
-        vibrate: [300, 100, 300],
-      }
-    );
-  }
-
-  sendDailySetupReminder() {
-    this.sendNotification(
-      '📅 Configura tu día',
-      {
-        body: '¿Cuántos bloques profundos quieres hoy?\n\nAbre FocusOS para planificar.',
-        requireInteraction: true,
-      }
-    );
-  }
-
-  sendExerciseReminder() {
-    this.sendNotification(
-      '💪 EJERCICIO OBLIGATORIO',
-      {
-        body: 'Es hora de tu bloque de ejercicio.\n\n30 minutos de actividad física.',
-        requireInteraction: true,
-        vibrate: [200, 100, 200, 100, 200],
-      }
-    );
-  }
-
-  sendLowDisciplineWarning(score: number) {
-    this.sendNotification(
-      '⚠️ DISCIPLINA BAJA',
-      {
-        body: `Tu puntuación es ${score}%.\n\nCumple los bloques restantes para mejorar.`,
-        requireInteraction: true,
-      }
-    );
-  }
-
-  sendStreakAchievement(days: number) {
-    this.sendNotification(
-      `🔥 RACHA DE ${days} DÍAS`,
-      {
-        body: '¡Excelente disciplina!\n\nSigue manteniendo el enfoque.',
-        requireInteraction: false,
       }
     );
   }
@@ -248,43 +228,81 @@ class NotificationService {
     });
   }
 
+  /**
+   * Programa notificaciones para un entregable:
+   * - Primera alerta 8 horas antes de la entrega
+   * - Luego cada 2 horas hasta la hora de entrega
+   */
+  scheduleDeliverableNotifications(task: Task) {
+    this.cancelTaskNotifications(task.id);
+
+    if (!task.isDeliverable || task.status === 'terminada' || task.status === 'aplazada') return;
+
+    const dueDate = task.dueDate.includes('T')
+      ? new Date(task.dueDate)
+      : new Date(task.dueDate + 'T23:59:00');
+    const now = new Date();
+
+    if (dueDate <= now) return;
+
+    const intervals = [8, 6, 4, 2];
+
+    intervals.forEach((hoursBefore, idx) => {
+      const alertTime = new Date(dueDate.getTime() - hoursBefore * 60 * 60 * 1000);
+      if (alertTime <= now) return;
+
+      const timeout = alertTime.getTime() - now.getTime();
+      const timerId = window.setTimeout(() => {
+        const timeStr = formatTo12h(
+          `${String(dueDate.getHours()).padStart(2, '0')}:${String(dueDate.getMinutes()).padStart(2, '0')}`
+        );
+        this.sendNotification(
+          `📋 ENTREGABLE: ${task.subject}`,
+          {
+            body: `⏰ Faltan ${hoursBefore} horas para la entrega (${timeStr}).\n\n${task.description || 'Revisa tu tarea.'}`,
+            tag: `deliverable-${task.id}-${hoursBefore}h`,
+            requireInteraction: true,
+            vibrate: [300, 100, 300, 100, 300],
+          }
+        );
+      }, timeout);
+      this.scheduledNotifications.set(`task-${task.id}-${idx}`, timerId);
+    });
+
+    // Alerta final: en la hora exacta de entrega
+    const finalTimeout = dueDate.getTime() - now.getTime();
+    if (finalTimeout > 0) {
+      const timerId = window.setTimeout(() => {
+        this.sendNotification(
+          `🚨 ENTREGA AHORA: ${task.subject}`,
+          {
+            body: '¡Es la hora de entrega! Asegúrate de entregar a tiempo.',
+            tag: `deliverable-${task.id}-now`,
+            requireInteraction: true,
+            vibrate: [500, 200, 500, 200, 500],
+          }
+        );
+      }, finalTimeout);
+      this.scheduledNotifications.set(`task-${task.id}-final`, timerId);
+    }
+  }
+
+  cancelTaskNotifications(taskId: string) {
+    const keys = Array.from(this.scheduledNotifications.keys()).filter(key =>
+      key.startsWith(`task-${taskId}`)
+    );
+    keys.forEach(key => {
+      const timerId = this.scheduledNotifications.get(key);
+      if (timerId) {
+        clearTimeout(timerId);
+        this.scheduledNotifications.delete(key);
+      }
+    });
+  }
+
   cancelAllNotifications() {
     this.scheduledNotifications.forEach(timerId => clearTimeout(timerId));
     this.scheduledNotifications.clear();
-  }
-
-  private getBlockLabel(type: string): string {
-    switch (type) {
-      case 'deep':
-        return 'Bloque Profundo';
-      case 'exercise':
-        return 'Ejercicio';
-      case 'light':
-        return 'Bloque Ligero';
-      case 'rest':
-        return 'Descanso';
-      default:
-        return 'Bloque';
-    }
-  }
-
-  // Programar notificación diaria para setup
-  scheduleDailySetup(hour: number = 8, minute: number = 30) {
-    const now = new Date();
-    const scheduleTime = new Date();
-    scheduleTime.setHours(hour, minute, 0, 0);
-    
-    if (scheduleTime <= now) {
-      scheduleTime.setDate(scheduleTime.getDate() + 1);
-    }
-    
-    const timeout = scheduleTime.getTime() - now.getTime();
-    
-    setTimeout(() => {
-      this.sendDailySetupReminder();
-      // Reprogramar para el día siguiente
-      this.scheduleDailySetup(hour, minute);
-    }, timeout);
   }
 }
 
