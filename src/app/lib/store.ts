@@ -1,5 +1,6 @@
 import { Block, BlockType, BlockPriority, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
 import { addMinutesToTime, durationBetween, todayStr } from './helpers';
+import { cloudSync } from './cloud-sync';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -103,9 +104,19 @@ function loadFromStorage<T>(key: string, fallback: T): T {
   }
 }
 
+const CLOUD_COLLECTIONS: Record<string, string> = {
+  [STORAGE_KEYS.tasks]: 'tasks',
+  [STORAGE_KEYS.blocks]: 'blocks',
+  [STORAGE_KEYS.metrics]: 'metrics',
+  [STORAGE_KEYS.settings]: 'settings',
+};
+
 function saveToStorage<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
+    // Subir a Firebase Cloud
+    const collection = CLOUD_COLLECTIONS[key];
+    if (collection) cloudSync.uploadDebounced(collection, value);
   } catch (e) {
     console.error(`Error saving ${key} to localStorage:`, e);
   }
@@ -138,6 +149,29 @@ class Store {
       return t;
     });
     if (changed) saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+  }
+
+  // ─── Cloud Sync ────────────────────────────────────────────────────────────
+
+  private listeners: Array<() => void> = [];
+
+  /** Suscribe a cambios en el store (para refresco desde sync remoto) */
+  subscribe(fn: () => void): () => void {
+    this.listeners.push(fn);
+    return () => { this.listeners = this.listeners.filter(l => l !== fn); };
+  }
+
+  private notifyListeners(): void {
+    this.listeners.forEach(fn => fn());
+  }
+
+  /** Recarga datos desde localStorage (usado cuando cloud sync actualiza localStorage) */
+  reloadFromStorage(): void {
+    this.tasks = loadFromStorage<Task[]>(STORAGE_KEYS.tasks, []);
+    this.blocks = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
+    this.metrics = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
+    this.settings = loadFromStorage<UserSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
+    this.notifyListeners();
   }
 
   // ─── Tasks ─────────────────────────────────────────────────────────────────

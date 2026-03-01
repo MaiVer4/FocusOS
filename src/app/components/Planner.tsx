@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { Block, Task, TaskStatus, Subtask } from '../lib/types';
@@ -23,6 +23,7 @@ import { googleAuth } from '../lib/google-auth';
 import { getClassroomPendingTasks, ClassroomTask } from '../lib/google-classroom';
 import { getCalendarEvents, CalendarEventItem } from '../lib/google-calendar';
 import { googleSync, SyncResult } from '../lib/google-sync';
+import { cloudSync } from '../lib/cloud-sync';
 
 export function Planner() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -74,6 +75,10 @@ export function Planner() {
     }
   };
 
+  // Ref para acceder a refreshData actualizado desde callbacks de cloud sync
+  const refreshRef = useRef(refreshData);
+  refreshRef.current = refreshData;
+
   useEffect(() => {
     refreshData();
     setClassroomConnected(googleAuth.isAuthenticated());
@@ -117,6 +122,26 @@ export function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ─── Cloud Sync (Firebase) ───────────────────────────────────────────────
+
+  useEffect(() => {
+    // Conectar cloud sync si el usuario ya se autenticó con Google
+    if (googleAuth.isAuthenticated() || googleAuth.wasConnected()) {
+      cloudSync.connect().then(ok => {
+        if (ok) console.log('[CloudSync] Sincronización en la nube activa');
+      });
+    }
+
+    // Escuchar cambios remotos (otro dispositivo escribió en Firestore)
+    const unsub = cloudSync.onRemoteChange(() => {
+      store.reloadFromStorage();
+      refreshRef.current();
+    });
+
+    return () => { unsub(); cloudSync.disconnect(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleManualSync = async () => {
     if (!googleAuth.isAuthenticated()) {
       try {
@@ -125,6 +150,7 @@ export function Planner() {
         await googleAuth.authenticate(forceConsent);
         setClassroomConnected(true);
         googleSync.startAutoSync();
+        cloudSync.connect(); // Activar sync en la nube
       } catch {
         return;
       }
