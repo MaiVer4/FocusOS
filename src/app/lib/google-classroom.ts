@@ -4,7 +4,6 @@
  */
 
 import { googleAuth } from './google-auth';
-import { todayStr } from './helpers';
 
 const BASE = 'https://classroom.googleapis.com/v1';
 
@@ -120,22 +119,25 @@ async function getCourseworkDetails(courseId: string, courseworkId: string): Pro
 export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
   const courses = await getCourses();
   const tasks: ClassroomTask[] = [];
-  const today = todayStr();
 
   for (const course of courses) {
     const submissions = await getMySubmissions(course.id);
 
-    // Filtrar solo entregas pendientes (no entregadas ni devueltas)
+    // Filtrar SOLO entregas verdaderamente pendientes (nunca entregadas)
     const pending = submissions.filter(
-      s => s.state === 'NEW' || s.state === 'CREATED' || s.state === 'RECLAIMED_BY_STUDENT'
+      s => s.state === 'NEW' || s.state === 'CREATED'
     );
 
     for (const sub of pending) {
       // Intentar obtener detalles del coursework
       const cw = await getCourseworkDetails(course.id, sub.courseWorkId);
 
+      // Si no podemos obtener los detalles del coursework, saltar
+      // (no tenemos título ni fecha real — no vale la pena importar basura)
+      if (!cw) continue;
+
       // Fecha de asignación: creationTime del coursework o del submission
-      const rawCreation = cw?.creationTime ?? sub.creationTime ?? '';
+      const rawCreation = cw.creationTime ?? sub.creationTime ?? '';
       let assignedDate = '';
       if (rawCreation) {
         const d = new Date(rawCreation);
@@ -153,27 +155,31 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         : (sub.creationTime ? new Date(sub.creationTime).getFullYear() : 0);
       if (assignedYear < 2026) continue;
 
-      let title = `Tarea de ${course.name}`;
-      let description = '';
-      let dueDateStr = today;
+      const title = cw.title;
+      const description = cw.description ?? '';
 
-      if (cw) {
-        title = cw.title;
-        description = cw.description ?? '';
+      // Construir fecha de entrega convirtiendo UTC → hora local
+      let dueDateStr = '';
+      if (cw.dueDate) {
+        const y = cw.dueDate.year;
+        const m = cw.dueDate.month - 1; // Date usa meses 0-indexed
+        const d = cw.dueDate.day;
+        const hh = cw.dueTime?.hours ?? 23;
+        const mm = cw.dueTime?.minutes ?? 59;
 
-        if (cw.dueDate) {
-          const y = cw.dueDate.year;
-          const m = String(cw.dueDate.month).padStart(2, '0');
-          const d = String(cw.dueDate.day).padStart(2, '0');
-          if (cw.dueTime && cw.dueTime.hours !== undefined) {
-            const hh = String(cw.dueTime.hours).padStart(2, '0');
-            const mm = String(cw.dueTime.minutes ?? 0).padStart(2, '0');
-            dueDateStr = `${y}-${m}-${d}T${hh}:${mm}`;
-          } else {
-            dueDateStr = `${y}-${m}-${d}`;
-          }
-        }
+        // Crear Date en UTC y convertir a local
+        const utcDate = new Date(Date.UTC(y, m, d, hh, mm, 0));
+        const localY = utcDate.getFullYear();
+        const localM = String(utcDate.getMonth() + 1).padStart(2, '0');
+        const localD = String(utcDate.getDate()).padStart(2, '0');
+        const localHH = String(utcDate.getHours()).padStart(2, '0');
+        const localMM = String(utcDate.getMinutes()).padStart(2, '0');
+
+        dueDateStr = `${localY}-${localM}-${localD}T${localHH}:${localMM}`;
       }
+
+      // Si no tiene fecha de entrega en Classroom, dejar vacío (sin fecha)
+      // en vez de inventar una fecha falsa
 
       // Evitar duplicados
       if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
