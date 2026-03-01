@@ -18,9 +18,10 @@ import {
   todayStr,
   formatDateDisplay,
 } from '../lib/helpers';
-import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap } from 'lucide-react';
+import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap, CalendarDays } from 'lucide-react';
 import { googleAuth } from '../lib/google-auth';
 import { getClassroomPendingTasks, ClassroomTask } from '../lib/google-classroom';
+import { getCalendarEvents, CalendarEventItem } from '../lib/google-calendar';
 
 export function Planner() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -43,6 +44,11 @@ export function Planner() {
   const [classroomLoading, setClassroomLoading] = useState(false);
   const [classroomError, setClassroomError] = useState<string | null>(null);
   const [classroomConnected, setClassroomConnected] = useState(false);
+  const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarEvents, setCalendarEvents] = useState<CalendarEventItem[]>([]);
+  const [calendarLoading, setCalendarLoading] = useState(false);
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [calendarImportAs, setCalendarImportAs] = useState<'blocks' | 'tasks'>('blocks');
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -405,6 +411,86 @@ export function Planner() {
     setActiveTab('tasks');
   };
 
+  // ─── Google Calendar ──────────────────────────────────────────────────────
+
+  const handleCalendarImport = async () => {
+    setCalendarLoading(true);
+    setCalendarError(null);
+    setCalendarEvents([]);
+    try {
+      if (!googleAuth.isAuthenticated()) {
+        googleAuth.signOut();
+        await googleAuth.authenticate(true);
+        setClassroomConnected(true);
+      }
+      const events = await getCalendarEvents();
+      if (events.length === 0) {
+        setCalendarError('No se encontraron eventos próximos en tu calendario.');
+      }
+      setCalendarEvents(events);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Error desconocido';
+      if (msg.includes('403')) {
+        setCalendarError(
+          'Permiso denegado. Verifica en Google Cloud Console:\n' +
+          '1. Que la API "Google Calendar API" esté habilitada\n' +
+          '2. Que el scope calendar.events.readonly esté en la pantalla de consentimiento\n' +
+          '3. Que aceptaste TODOS los permisos en el popup de Google'
+        );
+      } else {
+        setCalendarError(msg);
+      }
+    } finally {
+      setCalendarLoading(false);
+    }
+  };
+
+  const createCalendarItems = () => {
+    const selected = calendarEvents.filter(e => e.selected);
+    if (selected.length === 0) return;
+
+    if (calendarImportAs === 'blocks') {
+      for (const ev of selected) {
+        if (ev.isAllDay || !ev.startTime || !ev.endTime) continue;
+        const block: Block = {
+          id: crypto.randomUUID(),
+          date: ev.date,
+          startTime: ev.startTime,
+          endTime: ev.endTime,
+          type: 'light',
+          status: 'pending',
+          subject: ev.title,
+          description: ev.description,
+        };
+        store.addBlock(block);
+        if (notificationService.hasPermission()) {
+          notificationService.scheduleBlockNotifications(block);
+        }
+      }
+    } else {
+      for (const ev of selected) {
+        const task: Task = {
+          id: crypto.randomUUID(),
+          subject: ev.title,
+          description: ev.description,
+          notes: ev.location ? `📍 ${ev.location}` : '',
+          category: 'Calendario',
+          dueDate: ev.startTime ? `${ev.date}T${ev.startTime}` : ev.date,
+          difficulty: 'medium',
+          status: 'sin-iniciar',
+          isDeliverable: false,
+          createdAt: new Date().toISOString(),
+        };
+        store.addTask(task);
+      }
+    }
+
+    refreshData();
+    setShowCalendar(false);
+    setCalendarEvents([]);
+    setActiveTab(calendarImportAs === 'blocks' ? 'blocks' : 'tasks');
+  };
+
   const createSmartItems = () => {
     if (!smartItems) return;
     const settings = store.getSettings();
@@ -675,6 +761,17 @@ export function Planner() {
                   }`} />
                 </span>
                 Classroom
+              </button>
+              <button
+                onClick={() => { setCalendarEvents([]); setCalendarError(null); setShowCalendar(true); }}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                  classroomConnected
+                    ? 'bg-blue-600 hover:bg-blue-700'
+                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                }`}
+              >
+                <CalendarDays className="size-3.5" />
+                Calendar
               </button>
               <button
                 onClick={() => { setSmartItems(null); setSmartText(''); setShowSmartImport(true); }}
@@ -1432,6 +1529,168 @@ export function Planner() {
                     disabled={classroomTasks.every(t => !t.selected)}
                     className="flex-1 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors">
                     Importar {classroomTasks.filter(t => t.selected).length} tarea{classroomTasks.filter(t => t.selected).length !== 1 ? 's' : ''}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Google Calendar Modal ── */}
+      {showCalendar && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto">
+
+            <div className="flex items-center gap-2 mb-4">
+              <CalendarDays className="size-5 text-blue-400" />
+              <h3 className="text-xl font-bold">Google Calendar</h3>
+            </div>
+
+            {/* Sin datos cargados */}
+            {calendarEvents.length === 0 && !calendarLoading && !calendarError && (
+              <div className="space-y-4">
+                <p className="text-sm text-zinc-400">
+                  Importa tus próximos eventos de Google Calendar como bloques o tareas.
+                </p>
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setShowCalendar(false)}
+                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors">
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={handleCalendarImport}
+                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2">
+                    <CalendarDays className="size-4" /> Obtener eventos
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Cargando */}
+            {calendarLoading && (
+              <div className="flex flex-col items-center gap-3 py-8">
+                <Loader2 className="size-8 animate-spin text-blue-400" />
+                <p className="text-sm text-zinc-400">Obteniendo eventos del calendario...</p>
+              </div>
+            )}
+
+            {/* Error */}
+            {calendarError && (
+              <div className="space-y-4">
+                <div className="bg-red-900/20 border border-red-800/30 rounded-xl p-4">
+                  <p className="text-sm text-red-400 whitespace-pre-line">{calendarError}</p>
+                </div>
+                <div className="flex gap-3">
+                  <button type="button" onClick={() => setShowCalendar(false)}
+                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors">
+                    Cerrar
+                  </button>
+                  <button type="button" onClick={handleCalendarImport}
+                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold text-sm transition-colors">
+                    Reintentar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Lista de eventos */}
+            {calendarEvents.length > 0 && (
+              <div className="space-y-3">
+                {/* Selector: importar como bloques o tareas */}
+                <div className="flex rounded-xl overflow-hidden border border-zinc-700">
+                  <button
+                    onClick={() => setCalendarImportAs('blocks')}
+                    className={`flex-1 py-2 text-xs font-semibold transition-colors ${
+                      calendarImportAs === 'blocks'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Importar como Bloques
+                  </button>
+                  <button
+                    onClick={() => setCalendarImportAs('tasks')}
+                    className={`flex-1 py-2 text-xs font-semibold transition-colors ${
+                      calendarImportAs === 'tasks'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    Importar como Tareas
+                  </button>
+                </div>
+
+                {calendarImportAs === 'blocks' && calendarEvents.every(e => e.isAllDay) && (
+                  <p className="text-xs text-amber-400 bg-amber-900/20 border border-amber-800/30 rounded-lg px-3 py-2">
+                    Todos los eventos son de día completo. Los bloques requieren hora, usa "Importar como Tareas".
+                  </p>
+                )}
+
+                <p className="text-sm text-zinc-400">
+                  {calendarEvents.filter(e => e.selected).length} de {calendarEvents.length} seleccionados
+                </p>
+
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                  {calendarEvents.map((ev, idx) => {
+                    const cantImportAsBlock = calendarImportAs === 'blocks' && ev.isAllDay;
+                    return (
+                      <label key={ev.id}
+                        className={`flex gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${
+                          cantImportAsBlock
+                            ? 'bg-zinc-900 border-zinc-800 opacity-25 cursor-not-allowed'
+                            : ev.selected
+                              ? 'bg-blue-600/10 border-blue-600/30'
+                              : 'bg-zinc-900 border-zinc-800 opacity-40'
+                        }`}
+                      >
+                        <input type="checkbox" className="mt-0.5 accent-blue-500"
+                          checked={ev.selected && !cantImportAsBlock}
+                          disabled={cantImportAsBlock}
+                          onChange={e => {
+                            const next = [...calendarEvents];
+                            next[idx] = { ...next[idx], selected: e.target.checked };
+                            setCalendarEvents(next);
+                          }}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="font-medium text-sm truncate">{ev.title}</div>
+                          {ev.description && (
+                            <div className="text-xs text-zinc-400 mt-0.5 line-clamp-2">{ev.description}</div>
+                          )}
+                          <div className="flex flex-wrap gap-1.5 mt-1.5">
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-600/20 text-blue-400">
+                              {ev.date}
+                            </span>
+                            {ev.isAllDay ? (
+                              <span className="text-xs px-1.5 py-0.5 rounded-full bg-amber-600/20 text-amber-400">
+                                Todo el día
+                              </span>
+                            ) : (
+                              <span className="text-xs px-1.5 py-0.5 rounded-full bg-cyan-600/20 text-cyan-400 flex items-center gap-0.5">
+                                <Clock className="size-3" /> {formatTo12h(ev.startTime)} – {formatTo12h(ev.endTime)}
+                              </span>
+                            )}
+                            {ev.location && (
+                              <span className="text-xs px-1.5 py-0.5 rounded-full bg-zinc-700 text-zinc-300 truncate max-w-32">
+                                📍 {ev.location}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+
+                <div className="flex gap-3 pt-1">
+                  <button type="button" onClick={() => setShowCalendar(false)}
+                    className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors">
+                    Cancelar
+                  </button>
+                  <button type="button" onClick={createCalendarItems}
+                    disabled={calendarEvents.every(e => !e.selected || (calendarImportAs === 'blocks' && e.isAllDay))}
+                    className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors">
+                    Importar {calendarEvents.filter(e => e.selected && !(calendarImportAs === 'blocks' && e.isAllDay)).length}
                   </button>
                 </div>
               </div>
