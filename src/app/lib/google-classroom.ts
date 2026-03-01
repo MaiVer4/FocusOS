@@ -134,6 +134,25 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
       // Intentar obtener detalles del coursework
       const cw = await getCourseworkDetails(course.id, sub.courseWorkId);
 
+      // Fecha de asignación: creationTime del coursework o del submission
+      const rawCreation = cw?.creationTime ?? sub.creationTime ?? '';
+      let assignedDate = '';
+      if (rawCreation) {
+        const d = new Date(rawCreation);
+        if (!isNaN(d.getTime())) {
+          const yy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          assignedDate = `${yy}-${mm}-${dd}`;
+        }
+      }
+
+      // Solo incluir tareas ASIGNADAS en 2026 en adelante
+      const assignedYear = assignedDate
+        ? new Date(assignedDate + 'T00:00:00').getFullYear()
+        : (sub.creationTime ? new Date(sub.creationTime).getFullYear() : 0);
+      if (assignedYear < 2026) continue;
+
       let title = `Tarea de ${course.name}`;
       let description = '';
       let dueDateStr = today;
@@ -156,25 +175,8 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         }
       }
 
-      // Solo incluir tareas con fecha de 2026 en adelante
-      const dueDateParsed = new Date(dueDateStr.includes('T') ? dueDateStr : dueDateStr + 'T23:59:00');
-      if (dueDateParsed.getFullYear() < 2026) continue;
-
       // Evitar duplicados
       if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
-
-      // Fecha de asignación: creationTime del coursework o del submission
-      const rawCreation = cw?.creationTime ?? sub.creationTime ?? '';
-      let assignedDate = '';
-      if (rawCreation) {
-        const d = new Date(rawCreation);
-        if (!isNaN(d.getTime())) {
-          const yy = d.getFullYear();
-          const mm = String(d.getMonth() + 1).padStart(2, '0');
-          const dd = String(d.getDate()).padStart(2, '0');
-          assignedDate = `${yy}-${mm}-${dd}`;
-        }
-      }
 
       tasks.push({
         courseId: course.id,
