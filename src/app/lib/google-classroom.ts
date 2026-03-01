@@ -154,9 +154,10 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         }
       }
 
-      // Solo incluir tareas con fecha futura o de hoy
-      const dueMs = new Date(dueDateStr.includes('T') ? dueDateStr : dueDateStr + 'T23:59:00').getTime();
-      if (dueMs < Date.now() && dueDateStr !== today) continue;
+      // Solo incluir tareas pendientes de 2026 en adelante
+      const dueDate = new Date(dueDateStr.includes('T') ? dueDateStr : dueDateStr + 'T23:59:00');
+      if (dueDate.getFullYear() < 2026) continue;
+      if (dueDate.getTime() < Date.now() && dueDateStr !== today) continue;
 
       // Evitar duplicados
       if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
