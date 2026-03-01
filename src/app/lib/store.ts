@@ -483,6 +483,30 @@ class Store {
     return Math.max(0, score);
   }
 
+  /**
+   * Elimina bloques de hoy que terminaron hace más de 30 minutos.
+   * Devuelve la cantidad de bloques eliminados.
+   */
+  cleanExpiredBlocks(): number {
+    const now = new Date();
+    const today = now.toISOString().split('T')[0];
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const grace = 30; // minutos de gracia después de endTime
+
+    const before = this.blocks.length;
+    this.blocks = this.blocks.filter(b => {
+      if (b.date !== today) return true; // no tocar bloques de otros días
+      const [eh, em] = b.endTime.split(':').map(Number);
+      const endMinutes = eh * 60 + em;
+      return currentMinutes < endMinutes + grace; // mantener si aún no han pasado 30 min
+    });
+    const removed = before - this.blocks.length;
+    if (removed > 0) {
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    }
+    return removed;
+  }
+
   clearAll(): void {
     this.tasks = [];
     this.blocks = [];

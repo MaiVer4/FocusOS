@@ -79,6 +79,21 @@ export function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
+  // ─── Auto-limpieza: eliminar bloques 30 min después de terminar ──────────
+  useEffect(() => {
+    // Limpiar inmediatamente al montar
+    const cleaned = store.cleanExpiredBlocks();
+    if (cleaned > 0) refreshData();
+
+    const interval = setInterval(() => {
+      const removed = store.cleanExpiredBlocks();
+      if (removed > 0) refreshData();
+    }, 60_000); // cada 60 segundos
+
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ─── Auto-Sync con Google ────────────────────────────────────────────────
 
   useEffect(() => {
