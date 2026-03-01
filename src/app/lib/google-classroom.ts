@@ -178,8 +178,12 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         dueDateStr = `${localY}-${localM}-${localD}T${localHH}:${localMM}`;
       }
 
-      // Si no tiene fecha de entrega en Classroom, dejar vacío (sin fecha)
-      // en vez de inventar una fecha falsa
+      // No importar tareas vencidas hace 5 días o más
+      if (dueDateStr) {
+        const dueMs = new Date(dueDateStr).getTime();
+        const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000;
+        if (dueMs < fiveDaysAgo) continue;
+      }
 
       // Evitar duplicados
       if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
