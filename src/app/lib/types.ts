@@ -22,6 +22,7 @@ export interface Task {
   difficulty: Difficulty;
   status: TaskStatus;
   isDeliverable?: boolean;  // true = entrega de evidencia, false = repaso/personal
+  assignedDate?: string;    // fecha de asignación en Classroom (cuándo se publicó)
   externalId?: string;      // ID externo (Classroom courseworkId o Calendar eventId)
   source?: 'classroom' | 'calendar' | 'manual';  // origen de la tarea
   createdAt: string;

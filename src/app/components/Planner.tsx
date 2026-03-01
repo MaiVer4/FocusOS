@@ -473,9 +473,12 @@ export function Planner() {
         notes: '',
         category: ct.courseName,
         dueDate: ct.dueDate,
+        assignedDate: ct.assignedDate || undefined,
         difficulty: 'medium',
         status: 'sin-iniciar',
         isDeliverable: true,
+        source: 'classroom',
+        externalId: `classroom:${ct.courseworkId}`,
         createdAt: new Date().toISOString(),
       };
       store.addTask(task);
@@ -956,9 +959,16 @@ export function Planner() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 text-xs flex-wrap">
+                    {task.assignedDate && task.source === 'classroom' && (
+                      <span className="flex items-center gap-1 text-zinc-500">
+                        Asignada: {formatDateDisplay(task.assignedDate)}
+                      </span>
+                    )}
                     <span className="flex items-center gap-1 text-zinc-400">
                       <Clock className="size-3" />
-                      {task.dueDate ? formatDateDisplay(task.dueDate) : 'Sin fecha límite'}
+                      {task.dueDate
+                        ? (task.source === 'classroom' ? 'Entrega: ' : '') + formatDateDisplay(task.dueDate)
+                        : 'Sin fecha límite'}
                     </span>
                     <span className={`px-2 py-0.5 rounded-full ${
                       task.difficulty === 'high' ? 'bg-red-600/20 text-red-400' :
@@ -1653,8 +1663,13 @@ export function Planner() {
                           <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400 flex items-center gap-0.5">
                             <Package className="size-3" /> Entregable
                           </span>
-                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-cyan-600/20 text-cyan-400">
-                            {ct.dueDate.includes('T')
+                          {ct.assignedDate && (
+                            <span className="text-xs px-1.5 py-0.5 rounded-full bg-zinc-700 text-zinc-300">
+                              Asignada: {formatDateDisplay(ct.assignedDate)}
+                            </span>
+                          )}
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-cyan-600/20 text-cyan-400 flex items-center gap-0.5">
+                            <Clock className="size-3" /> Entrega: {ct.dueDate.includes('T')
                               ? formatDateDisplay(ct.dueDate)
                               : formatDateDisplay(ct.dueDate + 'T00:00')}
                           </span>

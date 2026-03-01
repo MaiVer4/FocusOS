@@ -72,6 +72,7 @@ async function syncClassroom(): Promise<{ tasks: number }> {
         notes: '',
         category: ct.courseName,
         dueDate: ct.dueDate,
+        assignedDate: ct.assignedDate || undefined,
         difficulty: 'medium',
         status: 'sin-iniciar',
         isDeliverable: true,
