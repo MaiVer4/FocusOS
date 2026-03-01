@@ -126,10 +126,12 @@ class Store {
   private tasks: Task[] = loadFromStorage<Task[]>(STORAGE_KEYS.tasks, []);
   private blocks: Block[] = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
   private metrics: DailyMetrics[] = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
-  private settings: UserSettings = loadFromStorage<UserSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
+  private settings: UserSettings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
 
   constructor() {
     this.migrateTaskStatuses();
+    // Persist merged settings so new default fields get saved
+    saveToStorage(STORAGE_KEYS.settings, this.settings);
   }
 
   /** Migra status antiguos (pending/in-progress/completed) a los nuevos */
@@ -170,7 +172,7 @@ class Store {
     this.tasks = loadFromStorage<Task[]>(STORAGE_KEYS.tasks, []);
     this.blocks = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
     this.metrics = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
-    this.settings = loadFromStorage<UserSettings>(STORAGE_KEYS.settings, DEFAULT_SETTINGS);
+    this.settings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
     this.notifyListeners();
   }
 

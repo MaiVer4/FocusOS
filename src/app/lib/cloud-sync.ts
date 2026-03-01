@@ -61,9 +61,12 @@ class CloudSync {
 
   // ── Conexión ────────────────────────────────────────────────────────────
 
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+
   /**
    * Conecta a Firebase con el token de Google existente
    * y activa sincronización bidireccional.
+   * Si el token está expirado, intenta renovarlo automáticamente.
    */
   async connect(): Promise<boolean> {
     if (this.active) return true;
@@ -71,9 +74,17 @@ class CloudSync {
     this.connecting = true;
 
     try {
-      const token = googleAuth.getAccessToken();
+      // Obtener token, o renovarlo si expiró
+      let token = googleAuth.getAccessToken();
+      if (!token && googleAuth.wasConnected()) {
+        console.log('[CloudSync] Token expirado, intentando renovar...');
+        const renewed = await googleAuth.tryAutoRenew();
+        if (renewed) token = googleAuth.getAccessToken();
+      }
       if (!token) {
+        console.warn('[CloudSync] Sin token disponible, reintentando en 10s...');
         this.connecting = false;
+        this.scheduleRetry();
         return false;
       }
 
@@ -81,12 +92,13 @@ class CloudSync {
 
       if (!getFirebaseUser()) {
         this.connecting = false;
+        this.scheduleRetry();
         return false;
       }
 
       console.log('[CloudSync] Conectado a Firebase');
 
-      // 1. Sync inicial: merge local ↔ nube
+      // 1. Sync inicial: nube → local (nube es fuente de verdad)
       await this.initialSync();
 
       // 2. Escuchar cambios remotos en tiempo real
@@ -98,8 +110,18 @@ class CloudSync {
     } catch (e) {
       console.error('[CloudSync] Error de conexión:', e);
       this.connecting = false;
+      this.scheduleRetry();
       return false;
     }
+  }
+
+  /** Reintenta la conexión después de un delay */
+  private scheduleRetry(): void {
+    if (this.retryTimer) return;
+    this.retryTimer = setTimeout(() => {
+      this.retryTimer = null;
+      this.connect();
+    }, 10_000);
   }
 
   // ── Subida (debounced) ──────────────────────────────────────────────────
@@ -144,9 +166,12 @@ class CloudSync {
           console.log(`[CloudSync] ${collection}: subido a la nube`);
         } else if (cloudData && localData) {
           if (collection === 'settings') {
-            // Settings: dispositivo actual gana
+            // Settings: merge nube → local (nube gana, local aporta campos nuevos)
+            const merged = { ...(localData as object), ...(cloudData as object) };
+            localStorage.setItem(storageKey, JSON.stringify(merged));
             this.lastWriteTs[collection] = Date.now();
-            await saveUserData(collection, localData);
+            await saveUserData(collection, merged);
+            console.log(`[CloudSync] ${collection}: merge settings`);
           } else {
             // Arrays (tasks, blocks, metrics): merge por ID, local gana en conflictos
             const merged = this.mergeArrays(
@@ -169,12 +194,14 @@ class CloudSync {
   }
 
   /**
-   * Merge dos arrays por ID. Items locales ganan sobre remotos.
+   * Merge dos arrays por ID. Nube gana sobre local para IDs duplicados
+   * (la nube tiene los cambios más recientes de cualquier dispositivo).
+   * Items que solo existen en local se conservan.
    */
   private mergeArrays<T extends { id: string }>(local: T[], cloud: T[]): T[] {
     const map = new Map<string, T>();
-    for (const item of cloud) map.set(item.id, item);   // nube primero
-    for (const item of local) map.set(item.id, item);   // local sobrescribe
+    for (const item of local) map.set(item.id, item);   // local primero
+    for (const item of cloud) map.set(item.id, item);   // nube sobrescribe duplicados
     return Array.from(map.values());
   }
 
@@ -218,7 +245,9 @@ class CloudSync {
     Object.values(this.debounceTimers).forEach(t => clearTimeout(t));
     this.debounceTimers = {};
     this.lastWriteTs = {};
+    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
     this.active = false;
+    this.connecting = false;
     signOutFirebase().catch(() => {});
     console.log('[CloudSync] Desconectado');
   }
