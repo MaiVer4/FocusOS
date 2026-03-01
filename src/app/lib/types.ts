@@ -18,10 +18,10 @@ export interface Task {
   notes?: string;
   category?: string;       // ej: "Java", "JavaScript", "Bases de datos"
   subtasks?: Subtask[];    // pasos del proyecto, se completan bloque a bloque
-  dueDate: string;
+  dueDate: string;          // vacío '' si no tiene fecha de entrega
   difficulty: Difficulty;
   status: TaskStatus;
-  isDeliverable?: boolean;
+  isDeliverable?: boolean;  // true = entrega de evidencia, false = repaso/personal
   createdAt: string;
   completedAt?: string;
 }

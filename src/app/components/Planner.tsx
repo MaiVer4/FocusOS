@@ -56,7 +56,12 @@ export function Planner() {
     setAllTasks(
       store.getTasks()
         .filter(t => t.status !== 'terminada')
-        .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+        .sort((a, b) => {
+          if (!a.dueDate && !b.dueDate) return 0;
+          if (!a.dueDate) return 1;
+          if (!b.dueDate) return -1;
+          return a.dueDate.localeCompare(b.dueDate);
+        })
     );
 
     // Programar notificaciones para entregables
@@ -97,11 +102,16 @@ export function Planner() {
 
   // ─── Add Task ────────────────────────────────────────────────────────────────
 
+  const [newTaskDeliverable, setNewTaskDeliverable] = useState(false);
+
   const addTask = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     const fd = new FormData(form);
-    const isDeliverable = fd.get('isDeliverable') === 'on';
+    const isDeliverable = newTaskDeliverable;
+    const dueDateRaw = (fd.get('dueDate') as string ?? '').trim();
+    // Para entregables la fecha es obligatoria
+    if (isDeliverable && !dueDateRaw) return;
     // Parse subtasks from comma-separated input
     const subtasksRaw = (fd.get('subtasks') as string ?? '').trim();
     const subtasks: Subtask[] = subtasksRaw
@@ -118,7 +128,7 @@ export function Planner() {
       notes: fd.get('notes') as string,
       category: (fd.get('category') as string || '').trim() || undefined,
       subtasks: subtasks.length > 0 ? subtasks : undefined,
-      dueDate: fd.get('dueDate') as string,
+      dueDate: dueDateRaw,
       difficulty: fd.get('difficulty') as Task['difficulty'],
       status: 'sin-iniciar',
       isDeliverable,
@@ -126,48 +136,51 @@ export function Planner() {
     };
     store.addTask(task);
 
-    // Auto-crear bloque para la tarea
-    const blockDate = task.dueDate.split('T')[0];
-    const settings = store.getSettings();
-    const existingBlocks = store.getBlocks(blockDate)
-      .sort((a, b) => a.endTime.localeCompare(b.endTime));
+    // Auto-crear bloque solo si tiene fecha
+    if (task.dueDate) {
+      const blockDate = task.dueDate.split('T')[0];
+      const settings = store.getSettings();
+      const existingBlocks = store.getBlocks(blockDate)
+        .sort((a, b) => a.endTime.localeCompare(b.endTime));
 
-    const startTime = existingBlocks.length > 0
-      ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
-      : settings.arrivalTime;
+      const startTime = existingBlocks.length > 0
+        ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
+        : settings.arrivalTime;
 
-    const duration = task.difficulty === 'high' ? 90
-      : task.difficulty === 'medium' ? 60 : 45;
-    const endTime = addMinutesToTime(startTime, duration);
-    const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
-      : task.difficulty === 'medium' ? 'medium' : 'low';
+      const duration = task.difficulty === 'high' ? 90
+        : task.difficulty === 'medium' ? 60 : 45;
+      const endTime = addMinutesToTime(startTime, duration);
+      const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
+        : task.difficulty === 'medium' ? 'medium' : 'low';
 
-    const block: Block = {
-      id: crypto.randomUUID(),
-      type: 'deep',
-      priority,
-      taskId: task.id,
-      task,
-      duration,
-      startTime,
-      endTime,
-      status: 'pending',
-      date: blockDate,
-      interruptions: 0,
-    };
+      const block: Block = {
+        id: crypto.randomUUID(),
+        type: 'deep',
+        priority,
+        taskId: task.id,
+        task,
+        duration,
+        startTime,
+        endTime,
+        status: 'pending',
+        date: blockDate,
+        interruptions: 0,
+      };
 
-    if (notificationService.hasPermission()) {
-      notificationService.scheduleBlockNotifications(block);
-      if (isDeliverable) {
-        notificationService.scheduleDeliverableNotifications(task);
+      if (notificationService.hasPermission()) {
+        notificationService.scheduleBlockNotifications(block);
+        if (isDeliverable) {
+          notificationService.scheduleDeliverableNotifications(task);
+        }
       }
-    }
-    store.addBlock(block);
+      store.addBlock(block);
 
-    if (blockDate === selectedDate) setActiveTab('blocks');
+      if (blockDate === selectedDate) setActiveTab('blocks');
+    }
 
     refreshData();
     setShowAddTask(false);
+    setNewTaskDeliverable(false);
     form.reset();
   };
 
@@ -181,7 +194,7 @@ export function Planner() {
 
   const postponeTask = (id: string, minutes: number) => {
     const task = store.getTask(id);
-    if (!task) return;
+    if (!task || !task.dueDate) return;
     const newDueDate = addMinutesToDatetime(task.dueDate, minutes);
     const newStatus: TaskStatus = task.status === 'en-progreso'
       ? 'en-progreso-aplazada'
@@ -213,7 +226,8 @@ export function Planner() {
     if (!editingTask) return;
     const fd = new FormData(e.currentTarget);
     const isDeliverable = fd.get('isDeliverable') === 'on';
-    const newDueDate = fd.get('dueDate') as string;
+    const newDueDate = (fd.get('dueDate') as string ?? '').trim();
+    if (isDeliverable && !newDueDate) return;
     const subtasksRaw = (fd.get('subtasks') as string ?? '').trim();
     // Preserve existing subtask done state when editing
     const existingSubtasks = editingTask.subtasks ?? [];
@@ -797,7 +811,7 @@ export function Planner() {
           ) : (
             <div className="space-y-2">
               {allTasks.map((task) => {
-                const isOverdue = task.dueDate.split('T')[0] < todayStr();
+                const isOverdue = task.dueDate ? task.dueDate.split('T')[0] < todayStr() : false;
                 return (
                 <div key={task.id} className={`bg-zinc-900 border rounded-xl p-4 space-y-2 ${
                   isOverdue ? 'border-red-600/40' : 'border-zinc-800'
@@ -806,9 +820,13 @@ export function Planner() {
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="font-semibold truncate">{task.subject}</span>
-                        {task.isDeliverable && (
+                        {task.isDeliverable ? (
                           <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-600/20 text-purple-400 flex items-center gap-0.5 flex-shrink-0">
                             <Package className="size-3" /> Entregable
+                          </span>
+                        ) : (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-teal-600/20 text-teal-400 flex items-center gap-0.5 flex-shrink-0">
+                            <BookOpen className="size-3" /> Personal
                           </span>
                         )}
                         {isOverdue && (
@@ -846,7 +864,7 @@ export function Planner() {
                   <div className="flex items-center gap-2 text-xs flex-wrap">
                     <span className="flex items-center gap-1 text-zinc-400">
                       <Clock className="size-3" />
-                      {formatDateDisplay(task.dueDate)}
+                      {task.dueDate ? formatDateDisplay(task.dueDate) : 'Sin fecha límite'}
                     </span>
                     <span className={`px-2 py-0.5 rounded-full ${
                       task.difficulty === 'high' ? 'bg-red-600/20 text-red-400' :
@@ -871,7 +889,7 @@ export function Planner() {
                       <ChevronDown className="size-3 absolute right-1 top-1/2 -translate-y-1/2 pointer-events-none opacity-60" />
                     </div>
                   </div>
-                  {task.status !== 'terminada' && (
+                  {task.status !== 'terminada' && task.dueDate && (
                     <div className="flex items-center gap-2 pt-1">
                       <span className="text-xs text-zinc-600">Aplazar:</span>
                       <button
@@ -952,6 +970,38 @@ export function Planner() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold mb-5">Nueva Tarea</h3>
             <form onSubmit={addTask} className="space-y-4">
+              {/* Tipo de tarea */}
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">¿Qué tipo de tarea es?</label>
+                <div className="flex rounded-xl overflow-hidden border border-zinc-700">
+                  <button type="button"
+                    onClick={() => setNewTaskDeliverable(true)}
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      newTaskDeliverable
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    <Package className="size-4" /> Entregable
+                  </button>
+                  <button type="button"
+                    onClick={() => setNewTaskDeliverable(false)}
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      !newTaskDeliverable
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    <BookOpen className="size-4" /> Personal / Repaso
+                  </button>
+                </div>
+                <p className="text-xs text-zinc-500 mt-1.5">
+                  {newTaskDeliverable
+                    ? '📦 Debes entregar una evidencia. Tendrá prioridad máxima con alertas automáticas.'
+                    : '📖 Para repasar conceptos o tareas personales. Sin fecha límite obligatoria.'}
+                </p>
+              </div>
+
               <div>
                 <label className="block text-sm text-zinc-400 mb-2">Materia / Título *</label>
                 <input type="text" name="subject" required
@@ -983,8 +1033,11 @@ export function Planner() {
                   placeholder={"Investigar el tema\nHacer la estructura\nCodificar la solución\nProbar y depurar"} />
               </div>
               <div>
-                <label className="block text-sm text-zinc-400 mb-2">Fecha y hora de entrega *</label>
-                <input type="datetime-local" name="dueDate" required
+                <label className="block text-sm text-zinc-400 mb-2">
+                  {newTaskDeliverable ? 'Fecha y hora de entrega *' : 'Fecha límite (opcional)'}
+                </label>
+                <input type="datetime-local" name="dueDate"
+                  required={newTaskDeliverable}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 [color-scheme:dark]" />
               </div>
               <div>
@@ -996,21 +1049,8 @@ export function Planner() {
                   <option value="high">Alta</option>
                 </select>
               </div>
-              {/* Marcar como entregable */}
-              <label className="flex items-start gap-3 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3 cursor-pointer hover:bg-zinc-800 transition-colors">
-                <input type="checkbox" name="isDeliverable"
-                  className="mt-0.5 size-4 rounded accent-purple-500 cursor-pointer" />
-                <div>
-                  <p className="text-sm font-medium text-white flex items-center gap-1.5">
-                    <Package className="size-4 text-purple-400" /> Marcar como entregable
-                  </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    Tendrá prioridad máxima. Recibirás alertas 8h antes y cada 2h hasta la entrega.
-                  </p>
-                </div>
-              </label>
               <div className="flex gap-3 pt-1">
-                <button type="button" onClick={() => setShowAddTask(false)}
+                <button type="button" onClick={() => { setShowAddTask(false); setNewTaskDeliverable(false); }}
                   className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold transition-colors">Cancelar</button>
                 <button type="submit"
                   className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold transition-colors">Agregar</button>
@@ -1224,9 +1264,31 @@ export function Planner() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold mb-1">Editar Tarea</h3>
             <p className="text-zinc-500 text-sm mb-5">
-              {editingTask.subject} · {formatDateDisplay(editingTask.dueDate)}
+              {editingTask.subject} · {editingTask.isDeliverable ? 'Entregable' : 'Personal'}
             </p>
             <form onSubmit={saveEditTask} className="space-y-4">
+              {/* Tipo de tarea */}
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">Tipo de tarea</label>
+                <div className="flex rounded-xl overflow-hidden border border-zinc-700">
+                  <label className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
+                    'peer-checked:bg-purple-600'
+                  }`}>
+                    <input type="radio" name="isDeliverable" value="on" defaultChecked={editingTask.isDeliverable ?? false}
+                      className="sr-only peer" />
+                    <span className="flex items-center gap-1.5 peer-checked:text-white">
+                      <Package className="size-4" /> Entregable
+                    </span>
+                  </label>
+                  <label className="flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="isDeliverable" value="off" defaultChecked={!(editingTask.isDeliverable ?? false)}
+                      className="sr-only peer" />
+                    <span className="flex items-center gap-1.5 peer-checked:text-white">
+                      <BookOpen className="size-4" /> Personal
+                    </span>
+                  </label>
+                </div>
+              </div>
               <div>
                 <label className="block text-sm text-zinc-400 mb-2">Materia / Título *</label>
                 <input type="text" name="subject" required defaultValue={editingTask.subject}
@@ -1256,8 +1318,8 @@ export function Planner() {
                   placeholder={"Investigar el tema\nHacer la estructura\nCodificar la solución\nProbar y depurar"} />
               </div>
               <div>
-                <label className="block text-sm text-zinc-400 mb-2">Fecha y hora de entrega *</label>
-                <input type="datetime-local" name="dueDate" required defaultValue={editingTask.dueDate}
+                <label className="block text-sm text-zinc-400 mb-2">Fecha límite</label>
+                <input type="datetime-local" name="dueDate" defaultValue={editingTask.dueDate}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 [color-scheme:dark]" />
               </div>
               <div>
@@ -1269,18 +1331,6 @@ export function Planner() {
                   <option value="high">Alta</option>
                 </select>
               </div>
-              <label className="flex items-start gap-3 bg-zinc-800/60 border border-zinc-700 rounded-xl p-3 cursor-pointer hover:bg-zinc-800 transition-colors">
-                <input type="checkbox" name="isDeliverable" defaultChecked={editingTask.isDeliverable ?? false}
-                  className="mt-0.5 size-4 rounded accent-purple-500 cursor-pointer" />
-                <div>
-                  <p className="text-sm font-medium text-white flex items-center gap-1.5">
-                    <Package className="size-4 text-purple-400" /> Marcar como entregable
-                  </p>
-                  <p className="text-xs text-zinc-500 mt-0.5">
-                    Tendrá prioridad máxima con alertas automáticas.
-                  </p>
-                </div>
-              </label>
               <div className="flex gap-3 pt-1">
                 <button type="button" onClick={() => setEditingTask(null)}
                   className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold transition-colors">

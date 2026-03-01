@@ -185,14 +185,21 @@ class Store {
   /** Tareas que vencen en una fecha específica */
   getTasksForDate(date: string): Task[] {
     return this.tasks.filter(t => {
+      if (!t.dueDate) return false; // tareas sin fecha no se asignan a un día
       const taskDate = t.dueDate.split('T')[0];
       return taskDate === date;
     });
   }
 
+  /** Tareas sin fecha de entrega (personales/repaso) */
+  getTasksWithoutDate(): Task[] {
+    return this.tasks.filter(t => !t.dueDate && t.status !== 'terminada');
+  }
+
   /** Tareas vencidas (fecha pasada) que no están terminadas ni aplazadas */
   getOverdueTasks(date: string): Task[] {
     return this.tasks.filter(t => {
+      if (!t.dueDate) return false;
       const taskDate = t.dueDate.split('T')[0];
       return taskDate < date && t.status !== 'terminada' && t.status !== 'aplazada';
     });
