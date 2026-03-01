@@ -329,6 +329,11 @@ export function Planner() {
       return;
     }
 
+    if (store.hasBlockOverlap(selectedDate, startTime, endTime)) {
+      alert('El horario se solapa con un bloque existente. Ajusta las horas.');
+      return;
+    }
+
     const taskId = fd.get('taskId') as string || undefined;
     const task = taskId ? tasks.find(t => t.id === taskId) : undefined;
 
@@ -372,6 +377,11 @@ export function Planner() {
 
     if (duration <= 0) {
       alert('La hora de fin debe ser posterior a la de inicio.');
+      return;
+    }
+
+    if (store.hasBlockOverlap(editingBlock.date, startTime, endTime, editingBlock.id)) {
+      alert('El horario se solapa con otro bloque existente. Ajusta las horas.');
       return;
     }
 

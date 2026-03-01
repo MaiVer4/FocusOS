@@ -241,6 +241,37 @@ class Store {
   }
 
   /**
+   * Comprueba si un rango horario solapa con algún bloque existente.
+   * Excluye el bloque con `excludeId` (útil al editar).
+   */
+  hasBlockOverlap(date: string, startTime: string, endTime: string, excludeId?: string): boolean {
+    const blocks = this.getBlocks(date).filter(b => !excludeId || b.id !== excludeId);
+    return blocks.some(b => startTime < b.endTime && endTime > b.startTime);
+  }
+
+  /**
+   * Busca el siguiente hueco libre de al menos `duration` minutos a partir de `fromTime`.
+   * Devuelve el startTime del hueco o null si no cabe antes de las 23:59.
+   */
+  findNextFreeSlot(date: string, duration: number, fromTime: string): string | null {
+    const blocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    let candidate = fromTime;
+
+    for (const b of blocks) {
+      // Si el candidato + duración cabe antes del inicio de este bloque, encontramos hueco
+      const candidateEnd = addMinutesToTime(candidate, duration);
+      if (candidateEnd <= b.startTime) return candidate;
+      // Si el bloque termina después del candidato, saltar al final del bloque + 5 min gap
+      if (b.endTime > candidate) candidate = addMinutesToTime(b.endTime, 5);
+    }
+
+    // Verificar si cabe después de todos los bloques
+    const finalEnd = addMinutesToTime(candidate, duration);
+    if (finalEnd <= '23:59') return candidate;
+    return null;
+  }
+
+  /**
    * Auto-genera bloques para tareas sin bloque asignado en la fecha dada.
    * Devuelve los bloques creados.
    */
@@ -256,17 +287,15 @@ class Store {
 
     if (unassigned.length === 0) return [];
 
-    const sorted = [...existingBlocks].sort((a, b) => a.endTime.localeCompare(b.endTime));
-    let lastEnd = sorted.length > 0
-      ? addMinutesToTime(sorted[sorted.length - 1].endTime, 10)
-      : this.settings.arrivalTime;
-
     const newBlocks: Block[] = [];
 
     for (const task of unassigned) {
       const duration = task.difficulty === 'high' ? 90
         : task.difficulty === 'medium' ? 60 : 45;
-      const startTime = lastEnd;
+
+      const startTime = this.findNextFreeSlot(date, duration, this.settings.arrivalTime);
+      if (!startTime) continue; // no hay hueco disponible
+
       const endTime = addMinutesToTime(startTime, duration);
       const priority = task.isDeliverable || task.difficulty === 'high'
         ? 'high'
@@ -287,7 +316,6 @@ class Store {
       };
       this.addBlock(block);
       newBlocks.push(block);
-      lastEnd = addMinutesToTime(endTime, 10);
     }
 
     return newBlocks;
