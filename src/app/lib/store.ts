@@ -1,5 +1,5 @@
 import { Block, BlockType, BlockPriority, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
-import { addMinutesToTime, durationBetween } from './helpers';
+import { addMinutesToTime, durationBetween, todayStr } from './helpers';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -45,16 +45,16 @@ const WEEKDAY_TEMPLATE: TemplateBlock[] = [
   { type: 'rest',     label: 'Vestirse y prepararse',         startTime: '11:00', endTime: '11:15', priority: 'low' },
   { type: 'rest',     label: 'Transporte al SENA',            startTime: '11:15', endTime: '12:00', priority: 'low' },
   { type: 'light',    label: 'SENA – Clases',                startTime: '12:00', endTime: '18:00', priority: 'high' },
-  { type: 'rest',     label: 'Llegada y merienda',            startTime: '18:30', endTime: '19:00', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 1',             startTime: '19:00', endTime: '19:40', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Descanso',                     startTime: '19:40', endTime: '19:50', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 2',             startTime: '19:50', endTime: '20:30', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Descanso corto',               startTime: '20:30', endTime: '20:40', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 3',             startTime: '20:40', endTime: '21:00', priority: 'high', assignTask: true },
-  { type: 'exercise', label: 'Ejercicio',                    startTime: '21:00', endTime: '21:40', priority: 'high' },
-  { type: 'rest',     label: 'Ducha',                        startTime: '21:40', endTime: '22:00', priority: 'low' },
-  { type: 'light',    label: 'Revisión y documentación',      startTime: '22:00', endTime: '22:45', priority: 'medium', assignTask: true },
-  { type: 'rest',     label: 'Redes sociales',               startTime: '22:45', endTime: '23:15', priority: 'low' },
+  { type: 'rest',     label: 'Llegada y cena',               startTime: '18:30', endTime: '19:30', priority: 'low' },
+  { type: 'deep',     label: 'Bloque profundo 1',             startTime: '19:30', endTime: '20:10', priority: 'high', assignTask: true },
+  { type: 'rest',     label: 'Descanso',                     startTime: '20:10', endTime: '20:20', priority: 'low' },
+  { type: 'deep',     label: 'Bloque profundo 2',             startTime: '20:20', endTime: '21:00', priority: 'high', assignTask: true },
+  { type: 'rest',     label: 'Descanso corto',               startTime: '21:00', endTime: '21:10', priority: 'low' },
+  { type: 'deep',     label: 'Bloque profundo 3',             startTime: '21:10', endTime: '21:30', priority: 'high', assignTask: true },
+  { type: 'exercise', label: 'Ejercicio',                    startTime: '21:30', endTime: '22:10', priority: 'high' },
+  { type: 'rest',     label: 'Ducha',                        startTime: '22:10', endTime: '22:30', priority: 'low' },
+  { type: 'light',    label: 'Revisión y documentación',      startTime: '22:30', endTime: '23:00', priority: 'medium', assignTask: true },
+  { type: 'rest',     label: 'Redes sociales',               startTime: '23:00', endTime: '23:15', priority: 'low' },
   { type: 'rest',     label: 'Prepararse para dormir',        startTime: '23:15', endTime: '23:45', priority: 'low' },
 ];
 
@@ -80,8 +80,9 @@ const SUNDAY_TEMPLATE: TemplateBlock[] = [
   { type: 'rest',     label: 'Tiempo libre',                  startTime: '13:00', endTime: '17:00', priority: 'low' },
   { type: 'light',    label: 'Planear semana – entregas y prioridades', startTime: '17:00', endTime: '18:00', priority: 'high', assignTask: true },
   { type: 'exercise', label: 'Ejercicio ligero',              startTime: '18:00', endTime: '18:30', priority: 'medium' },
-  { type: 'rest',     label: 'Ducha y cena',                  startTime: '18:30', endTime: '19:15', priority: 'low' },
-  { type: 'rest',     label: 'Tiempo libre (relajarse)',       startTime: '19:15', endTime: '22:00', priority: 'low' },
+  { type: 'rest',     label: 'Descanso',                      startTime: '18:30', endTime: '19:00', priority: 'low' },
+  { type: 'rest',     label: 'Ducha y cena',                  startTime: '19:00', endTime: '19:45', priority: 'low' },
+  { type: 'rest',     label: 'Tiempo libre (relajarse)',       startTime: '19:45', endTime: '22:00', priority: 'low' },
   { type: 'rest',     label: 'Prepararse para dormir temprano', startTime: '22:00', endTime: '22:30', priority: 'low' },
 ];
 
@@ -154,33 +155,177 @@ class Store {
     return this.tasks.find(t => t.externalId === externalId);
   }
 
-  /** Busca un bloque por su ID externo (Calendar) */
-  findBlockByExternalId(externalId: string): Block | undefined {
-    return this.blocks.find(b => b.externalId === externalId);
+  /** Obtiene todas las tareas importadas de una fuente específica */
+  getTasksBySource(source: 'classroom' | 'calendar' | 'manual'): Task[] {
+    return this.tasks.filter(t => t.source === source);
   }
 
   addTask(task: Task): void {
     this.tasks = [...this.tasks, task];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+    this.autoAssignBlock(task);
+  }
+
+  /**
+   * Crea automáticamente un bloque para la tarea si:
+   * - La tarea tiene fecha (dueDate)
+   * - Ya existen bloques para ese día (la rutina fue generada)
+   * - La tarea no tiene ya un bloque asignado
+   * Luego reorganiza todos los bloques del día.
+   */
+  private autoAssignBlock(task: Task): void {
+    if (!task.dueDate || task.status === 'terminada') return;
+
+    const blockDate = task.dueDate.split('T')[0];
+    const existingBlocks = this.getBlocks(blockDate);
+
+    // Solo auto-crear si ya hay bloques ese día (la rutina fue generada)
+    if (existingBlocks.length === 0) return;
+
+    // Verificar que no tenga ya un bloque
+    if (existingBlocks.some(b => b.taskId === task.id)) return;
+
+    const duration = task.difficulty === 'high' ? 90
+      : task.difficulty === 'medium' ? 60 : 45;
+    const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
+      : task.difficulty === 'medium' ? 'medium' : 'low';
+
+    const freeSlot = this.findNextFreeSlot(blockDate, duration, this.settings.arrivalTime);
+    const startTime = freeSlot ?? this.settings.arrivalTime;
+    const endTime = addMinutesToTime(startTime, duration);
+
+    const block: Block = {
+      id: crypto.randomUUID(),
+      type: 'deep',
+      priority,
+      taskId: task.id,
+      task,
+      duration,
+      startTime,
+      endTime,
+      status: 'pending',
+      date: blockDate,
+      interruptions: 0,
+    };
+    this.addBlock(block);
+    this.reorganizeBlocks(blockDate);
   }
 
   updateTask(id: string, updates: Partial<Task>): void {
+    const oldTask = this.tasks.find(t => t.id === id);
+    const oldDate = oldTask?.dueDate?.split('T')[0];
+
     this.tasks = this.tasks.map(t => t.id === id ? { ...t, ...updates } : t);
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+
+    const updatedTask = this.tasks.find(t => t.id === id);
+    const newDate = updatedTask?.dueDate?.split('T')[0];
+
     // Update embedded task references in blocks
     this.blocks = this.blocks.map(b =>
-      b.taskId === id ? { ...b, task: this.tasks.find(t => t.id === id) } : b
+      b.taskId === id ? { ...b, task: updatedTask } : b
     );
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+
+    // Si cambió la fecha, mover el bloque al nuevo día
+    if (oldDate && newDate && oldDate !== newDate) {
+      const taskBlock = this.blocks.find(b => b.taskId === id && b.date === oldDate);
+      if (taskBlock) {
+        // Mover bloque al nuevo día
+        this.blocks = this.blocks.map(b =>
+          b.id === taskBlock.id ? { ...b, date: newDate } : b
+        );
+        saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+        this.reorganizeBlocks(oldDate);
+        this.reorganizeBlocks(newDate);
+      } else if (updatedTask) {
+        // No tenía bloque, intentar asignar en el nuevo día
+        this.autoAssignBlock(updatedTask);
+      }
+    } else if (newDate) {
+      // Misma fecha: si cambió dificultad, ajustar duración del bloque
+      if (updates.difficulty && oldTask && updates.difficulty !== oldTask.difficulty) {
+        const newDuration = updates.difficulty === 'high' ? 90
+          : updates.difficulty === 'medium' ? 60 : 45;
+        const newPriority = (updatedTask?.isDeliverable || updates.difficulty === 'high') ? 'high'
+          : updates.difficulty === 'medium' ? 'medium' : 'low';
+        const taskBlock = this.blocks.find(b => b.taskId === id && b.date === newDate);
+        if (taskBlock) {
+          this.blocks = this.blocks.map(b =>
+            b.id === taskBlock.id ? {
+              ...b,
+              duration: newDuration,
+              endTime: addMinutesToTime(b.startTime, newDuration),
+              priority: newPriority,
+            } : b
+          );
+          saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+          this.reorganizeBlocks(newDate);
+        }
+      }
+
+      // Si no tenía bloque, intentar asignar
+      if (updatedTask && !this.blocks.some(b => b.taskId === id)) {
+        this.autoAssignBlock(updatedTask);
+      }
+    }
+
+    // Si se marcó como terminada, reorganizar
+    if (updates.status === 'terminada' && newDate) {
+      this.reorganizeBlocks(newDate);
+    }
   }
 
   deleteTask(id: string): void {
+    // Encontrar las fechas afectadas antes de eliminar
+    const affectedDates = new Set(
+      this.blocks.filter(b => b.taskId === id).map(b => b.date)
+    );
+
     this.tasks = this.tasks.filter(t => t.id !== id);
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+
+    // Desvincular la tarea de sus bloques
     this.blocks = this.blocks.map(b =>
       b.taskId === id ? { ...b, taskId: undefined, task: undefined } : b
     );
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+
+    // Reasignar tareas sin bloque y reorganizar para cada día afectado
+    for (const date of affectedDates) {
+      this.assignUnblockedTasks(date);
+      this.reorganizeBlocks(date);
+    }
+  }
+
+  /**
+   * Busca tareas del día que no tienen bloque asignado y las asigna
+   * a bloques libres (sin tarea) del mismo día.
+   */
+  private assignUnblockedTasks(date: string): void {
+    const dayBlocks = this.getBlocks(date);
+    const tasksWithBlocks = new Set(
+      dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
+    );
+    const dayTasks = this.getTasksForDayWithCarryOver(date)
+      .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
+
+    // Bloques libres (sin tarea, pendientes, de tipo deep/light)
+    const freeBlocks = dayBlocks.filter(
+      b => !b.taskId && b.status === 'pending' && (b.type === 'deep' || b.type === 'light')
+    );
+
+    const toAssign = Math.min(dayTasks.length, freeBlocks.length);
+    for (let i = 0; i < toAssign; i++) {
+      const block = freeBlocks[i];
+      const task = dayTasks[i];
+      this.blocks = this.blocks.map(b =>
+        b.id === block.id ? { ...b, taskId: task.id, task } : b
+      );
+    }
+    if (toAssign > 0) {
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    }
   }
 
   toggleSubtask(taskId: string, subtaskId: string): void {
@@ -370,12 +515,12 @@ class Store {
   }
 
   /**
-   * Reorganiza todos los bloques de un día para eliminar solapamientos.
+   * Reorganiza los bloques de un día para eliminar solapamientos.
    * Lógica:
-   *  1. Los bloques ya completados/activos se fijan en su posición.
-   *  2. Los bloques de trabajo (deep/light/exercise) se colocan secuencialmente.
-   *  3. Los bloques rest/low se comprimen o eliminan para hacer espacio.
-   *  4. Orden: alta prioridad primero, luego media, luego baja.
+   *  1. Los bloques completados/activos se fijan en su posición.
+   *  2. Los bloques pendientes mantienen su orden cronológico.
+   *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
+   *  4. Los rest/low que no caben se eliminan.
    */
   reorganizeBlocks(date: string): void {
     const dayBlocks = this.getBlocks(date);
@@ -385,82 +530,47 @@ class Store {
     const fixed = dayBlocks.filter(b => b.status === 'completed' || b.status === 'active');
     const pending = dayBlocks.filter(b => b.status !== 'completed' && b.status !== 'active');
 
-    // Ordenar pendientes: prioridad (high>medium>low), luego tipo (deep>exercise>light>rest)
-    const prioOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
-    const typeOrder: Record<string, number> = { deep: 0, exercise: 1, light: 2, rest: 3 };
-    pending.sort((a, b) => {
-      const pa = prioOrder[a.priority] ?? 2;
-      const pb = prioOrder[b.priority] ?? 2;
-      if (pa !== pb) return pa - pb;
-      const ta = typeOrder[a.type] ?? 3;
-      const tb = typeOrder[b.type] ?? 3;
-      if (ta !== tb) return ta - tb;
-      return a.startTime.localeCompare(b.startTime);
-    });
+    // Ordenar pendientes cronológicamente (mantener el orden del usuario)
+    pending.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
     // Crear "ocupación" con bloques fijos
-    const occupied = fixed.map(b => ({ start: b.startTime, end: b.endTime }));
+    const occupied: Array<{ start: string; end: string }> = fixed.map(b => ({ start: b.startTime, end: b.endTime }));
     occupied.sort((a, b) => a.start.localeCompare(b.start));
 
-    // Función para encontrar hueco libre de duración dada después de fromTime
-    const findSlot = (duration: number, fromTime: string): string | null => {
-      let candidate = fromTime;
-      for (const occ of occupied) {
-        const candidateEnd = addMinutesToTime(candidate, duration);
-        if (candidateEnd <= occ.start) return candidate;
-        if (occ.end > candidate) candidate = addMinutesToTime(occ.end, 5);
-      }
-      const finalEnd = addMinutesToTime(candidate, duration);
-      if (finalEnd <= '23:59') return candidate;
-      return null;
-    };
-
-    // Calcular espacio total disponible para saber si hay que comprimir rest blocks
-    const totalFixedMin = fixed.reduce((s, b) => s + durationBetween(b.startTime, b.endTime), 0);
-    const workBlocks = pending.filter(b => b.type !== 'rest' || b.priority !== 'low');
-    const restBlocks = pending.filter(b => b.type === 'rest' && b.priority === 'low');
-    const workMinNeeded = workBlocks.reduce((s, b) => s + b.duration, 0);
-    const restMinOriginal = restBlocks.reduce((s, b) => s + b.duration, 0);
-    const dayAvailable = durationBetween(this.settings.wakeTime, this.settings.sleepTime) - totalFixedMin;
-    const gapMinutes = (workBlocks.length + restBlocks.length) * 5; // 5 min entre bloques
-    const spaceForRest = Math.max(0, dayAvailable - workMinNeeded - gapMinutes);
-
-    // Ratio de compresión para rest blocks
-    const restRatio = restMinOriginal > 0 ? Math.min(1, spaceForRest / restMinOriginal) : 1;
-
-    // Asignar duraciones a rest blocks (mínimo 10 min, o eliminar si < 10)
-    for (const rb of restBlocks) {
-      rb.duration = Math.round(rb.duration * restRatio);
-      if (rb.duration < 10) rb.duration = 0; // se eliminará
-    }
-
-    // Combinar work + rest (filtrar rest con duración 0) y reordenar cronológicamente
-    // Prioridad de colocación: work blocks primero, rest en los gaps
-    const toPlace = [
-      ...workBlocks,
-      ...restBlocks.filter(rb => rb.duration > 0),
-    ];
-
-    // Re-sort: intenta mantener el orden original por startTime
-    toPlace.sort((a, b) => a.startTime.localeCompare(b.startTime));
-
-    // Colocar cada bloque
+    // Colocar cada bloque pendiente en orden cronológico
+    // Solo se desplaza si se solapa con un bloque ya colocado (cascada hacia adelante)
     const placed: Block[] = [...fixed];
     const idsToRemove = new Set<string>();
 
-    for (const block of toPlace) {
-      const slot = findSlot(block.duration, this.settings.wakeTime);
-      if (!slot) {
-        // No cabe → eliminarlo si es rest, sino marcarlo para no perderlo
+    for (const block of pending) {
+      let candidate = block.startTime;
+
+      // Buscar la primera posición libre a partir de la posición actual del bloque
+      for (const occ of occupied) {
+        const candidateEnd = addMinutesToTime(candidate, block.duration);
+        // Si hay solapamiento, mover después del slot ocupado + 5 min de gap
+        if (candidate < occ.end && candidateEnd > occ.start) {
+          candidate = addMinutesToTime(occ.end, 5);
+        }
+      }
+
+      const newEnd = addMinutesToTime(candidate, block.duration);
+      if (newEnd > '23:59') {
+        // No cabe → eliminarlo si es rest de baja prioridad
         if (block.type === 'rest' && block.priority === 'low') {
           idsToRemove.add(block.id);
+          continue;
         }
+        // Si no es rest, dejarlo donde estaba (no se puede mover más)
+        occupied.push({ start: block.startTime, end: block.endTime });
+        occupied.sort((a, b) => a.start.localeCompare(b.start));
+        placed.push(block);
         continue;
       }
-      const newEnd = addMinutesToTime(slot, block.duration);
-      block.startTime = slot;
+
+      block.startTime = candidate;
       block.endTime = newEnd;
-      occupied.push({ start: slot, end: newEnd });
+      occupied.push({ start: candidate, end: newEnd });
       occupied.sort((a, b) => a.start.localeCompare(b.start));
       placed.push(block);
     }
@@ -515,6 +625,11 @@ class Store {
   }
 
   deleteAllTasks(): void {
+    // Obtener fechas afectadas
+    const affectedDates = new Set(
+      this.blocks.filter(b => b.taskId).map(b => b.date)
+    );
+
     this.tasks = [];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
     // Remove task references from all blocks
@@ -522,6 +637,11 @@ class Store {
       b.taskId ? { ...b, taskId: undefined, task: undefined } : b
     );
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+
+    // Reorganizar cada día afectado
+    for (const date of affectedDates) {
+      this.reorganizeBlocks(date);
+    }
   }
 
   // ─── Metrics ───────────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@ export function Planner() {
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{ message: string; onConfirm: () => void } | null>(null);
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -99,14 +100,19 @@ export function Planner() {
   useEffect(() => {
     const unsub = googleSync.subscribe((result) => {
       setSyncResult(result);
-      if (result.status === 'success' && (result.newTasks > 0 || result.newBlocks > 0)) {
+      if (result.status === 'success' && (result.newTasks > 0 || result.updatedTasks > 0 || result.removedTasks > 0)) {
         refreshData();
       }
+      // Actualizar estado de conexión
+      setClassroomConnected(googleAuth.isAuthenticated() || googleAuth.wasConnected());
     });
-    // Iniciar auto-sync si está autenticado
-    if (googleAuth.isAuthenticated()) {
+
+    // Iniciar auto-sync: si el usuario se conectó antes, intentar renovar y sincronizar
+    if (googleAuth.isAuthenticated() || googleAuth.wasConnected()) {
+      setClassroomConnected(true);
       googleSync.startAutoSync();
     }
+
     return () => { unsub(); googleSync.stopAutoSync(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -114,7 +120,9 @@ export function Planner() {
   const handleManualSync = async () => {
     if (!googleAuth.isAuthenticated()) {
       try {
-        await googleAuth.authenticate(true);
+        // Primera vez: pide consentimiento. Si ya se conectó antes, intenta silencioso.
+        const forceConsent = !googleAuth.wasConnected();
+        await googleAuth.authenticate(forceConsent);
         setClassroomConnected(true);
         googleSync.startAutoSync();
       } catch {
@@ -185,52 +193,15 @@ export function Planner() {
     };
     store.addTask(task);
 
-    // Auto-crear bloque y reorganizar si tiene fecha y existen bloques ese día
-    if (task.dueDate) {
+    // Notificaciones para entregables
+    if (task.dueDate && notificationService.hasPermission()) {
       const blockDate = task.dueDate.split('T')[0];
-      const existingBlocks = store.getBlocks(blockDate);
-
-      const duration = task.difficulty === 'high' ? 90
-        : task.difficulty === 'medium' ? 60 : 45;
-      const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
-        : task.difficulty === 'medium' ? 'medium' : 'low';
-
-      // Buscar un hueco libre primero
-      const freeSlot = store.findNextFreeSlot(blockDate, duration, store.getSettings().arrivalTime);
-      const startTime = freeSlot ?? store.getSettings().arrivalTime;
-      const endTime = addMinutesToTime(startTime, duration);
-
-      const block: Block = {
-        id: crypto.randomUUID(),
-        type: 'deep',
-        priority,
-        taskId: task.id,
-        task,
-        duration,
-        startTime,
-        endTime,
-        status: 'pending',
-        date: blockDate,
-        interruptions: 0,
-      };
-
-      store.addBlock(block);
-
-      // Si no hubo hueco libre o había bloques previos, reorganizar todo el día
-      if (!freeSlot || existingBlocks.length > 0) {
-        store.reorganizeBlocks(blockDate);
+      store.getBlocks(blockDate).forEach(b => {
+        notificationService.scheduleBlockNotifications(b);
+      });
+      if (isDeliverable) {
+        notificationService.scheduleDeliverableNotifications(task);
       }
-
-      // Reprogramar notificaciones con los nuevos horarios
-      if (notificationService.hasPermission()) {
-        store.getBlocks(blockDate).forEach(b => {
-          notificationService.scheduleBlockNotifications(b);
-        });
-        if (isDeliverable) {
-          notificationService.scheduleDeliverableNotifications(task);
-        }
-      }
-
       if (blockDate === selectedDate) setActiveTab('blocks');
     }
 
@@ -241,11 +212,14 @@ export function Planner() {
   };
 
   const deleteTask = (id: string) => {
-    if (confirm('¿Eliminar esta tarea? Los bloques asociados quedarán sin tarea.')) {
-      notificationService.cancelTaskNotifications(id);
-      store.deleteTask(id);
-      refreshData();
-    }
+    setConfirmAction({
+      message: '¿Eliminar esta tarea? Los bloques asociados quedarán sin tarea.',
+      onConfirm: () => {
+        notificationService.cancelTaskNotifications(id);
+        store.deleteTask(id);
+        refreshData();
+      },
+    });
   };
 
   const postponeTask = (id: string, minutes: number) => {
@@ -375,6 +349,42 @@ export function Planner() {
     refreshData();
   };
 
+  const postponeBlock = (id: string, minutes: number) => {
+    const block = store.getBlock(id);
+    if (!block || block.status === 'completed' || block.status === 'failed') return;
+    const newStart = addMinutesToTime(block.startTime, minutes);
+    const newEnd = addMinutesToTime(block.endTime, minutes);
+    // No pasar de las 23:59
+    if (newEnd > '23:59') return;
+
+    // Extender el bloque anterior para llenar el hueco
+    const dayBlocks = store.getBlocks(block.date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const blockIdx = dayBlocks.findIndex(b => b.id === id);
+    if (blockIdx > 0) {
+      const prev = dayBlocks[blockIdx - 1];
+      if (prev.status !== 'completed' && prev.status !== 'failed' && prev.endTime <= block.startTime) {
+        const newPrevEnd = newStart;
+        const newPrevDuration = durationBetween(prev.startTime, newPrevEnd);
+        if (newPrevDuration > 0) {
+          store.updateBlock(prev.id, { endTime: newPrevEnd, duration: newPrevDuration });
+        }
+      }
+    }
+
+    notificationService.cancelBlockNotifications(id);
+    store.updateBlock(id, { startTime: newStart, endTime: newEnd });
+    // Reorganizar bloques posteriores para eliminar solapamientos
+    store.reorganizeBlocks(block.date);
+    // Re-programar notificaciones de todos los bloques con horarios actualizados
+    if (notificationService.hasPermission()) {
+      store.getBlocks(block.date).forEach(b => {
+        notificationService.cancelBlockNotifications(b.id);
+        notificationService.scheduleBlockNotifications(b);
+      });
+    }
+    refreshData();
+  };
+
   const saveEditBlock = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!editingBlock) return;
@@ -435,9 +445,9 @@ export function Planner() {
     setClassroomError(null);
     setClassroomTasks([]);
     try {
-      // Siempre forzar consentimiento para asegurar que se otorguen todos los scopes
-      googleAuth.signOut();
-      await googleAuth.authenticate(true);
+      if (!googleAuth.isAuthenticated()) {
+        await googleAuth.authenticate(true);
+      }
       setClassroomConnected(true);
       const tasks = await getClassroomPendingTasks();
       if (tasks.length === 0) {
@@ -502,7 +512,6 @@ export function Planner() {
     setCalendarEvents([]);
     try {
       if (!googleAuth.isAuthenticated()) {
-        googleAuth.signOut();
         await googleAuth.authenticate(true);
         setClassroomConnected(true);
       }
@@ -559,12 +568,6 @@ export function Planner() {
 
   const createSmartItems = () => {
     if (!smartItems) return;
-    const settings = store.getSettings();
-    const existingBlocks = store.getBlocks(selectedDate)
-      .sort((a, b) => a.endTime.localeCompare(b.endTime));
-    let lastEnd = existingBlocks.length > 0
-      ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
-      : settings.arrivalTime;
 
     smartItems.forEach((item, idx) => {
       if (!smartSelected[idx]) return;
@@ -580,34 +583,12 @@ export function Planner() {
         isDeliverable: item.isDeliverable ?? false,
         createdAt: new Date().toISOString(),
       };
+      // store.addTask auto-crea bloque y reorganiza
       store.addTask(task);
 
-      // Schedule deliverable notifications
       if (task.isDeliverable && notificationService.hasPermission()) {
         notificationService.scheduleDeliverableNotifications(task);
       }
-
-      const blockDate = dueDate.split('T')[0];
-      const startTime = lastEnd;
-      const endTime = addMinutesToTime(startTime, item.estimatedMinutes);
-      const block: Block = {
-        id: crypto.randomUUID(),
-        type: item.blockType,
-        priority: item.difficulty === 'high' ? 'high' : item.difficulty === 'medium' ? 'medium' : 'low',
-        taskId: task.id,
-        task,
-        duration: item.estimatedMinutes,
-        startTime,
-        endTime,
-        status: 'pending',
-        date: blockDate,
-        interruptions: 0,
-      };
-      if (notificationService.hasPermission()) {
-        notificationService.scheduleBlockNotifications(block);
-      }
-      store.addBlock(block);
-      lastEnd = addMinutesToTime(endTime, 10);
     });
 
     refreshData();
@@ -648,8 +629,12 @@ export function Planner() {
             <>
               <GraduationCap className="size-3" />
               <CalendarDays className="size-3" />
-              {syncResult.newTasks > 0 || syncResult.newBlocks > 0
-                ? `+${syncResult.newTasks} tareas, +${syncResult.newBlocks} bloques importados`
+              {syncResult.newTasks > 0 || syncResult.updatedTasks > 0 || syncResult.removedTasks > 0
+                ? [
+                    syncResult.newTasks > 0 && `+${syncResult.newTasks} nuevas`,
+                    syncResult.updatedTasks > 0 && `${syncResult.updatedTasks} actualizada${syncResult.updatedTasks !== 1 ? 's' : ''}`,
+                    syncResult.removedTasks > 0 && `${syncResult.removedTasks} eliminada${syncResult.removedTasks !== 1 ? 's' : ''}`,
+                  ].filter(Boolean).join(', ')
                 : 'Todo sincronizado'}
               <span className="ml-auto text-zinc-500">
                 {syncResult.lastSync && new Date(syncResult.lastSync).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
@@ -732,11 +717,14 @@ export function Planner() {
               {blocks.length > 0 && (
                 <button
                   onClick={() => {
-                    if (confirm(`¿Eliminar todos los bloques del ${formatDateDisplay(selectedDate)}?`)) {
-                      notificationService.cancelAllNotifications();
-                      store.deleteAllBlocksForDate(selectedDate);
-                      refreshData();
-                    }
+                    setConfirmAction({
+                      message: `¿Eliminar todos los bloques del ${formatDateDisplay(selectedDate)}?`,
+                      onConfirm: () => {
+                        notificationService.cancelAllNotifications();
+                        store.deleteAllBlocksForDate(selectedDate);
+                        refreshData();
+                      },
+                    });
                   }}
                   className="px-3 py-2 bg-red-900/50 hover:bg-red-800/60 text-red-400 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
                 >
@@ -820,6 +808,23 @@ export function Planner() {
                       )}
                     </div>
                   </div>
+                  {block.status === 'pending' && (
+                    <div className="flex items-center gap-2 pt-2 mt-2 border-t border-white/5">
+                      <span className="text-xs opacity-40">Aplazar:</span>
+                      <button
+                        onClick={() => postponeBlock(block.id, 30)}
+                        className="text-xs px-2 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors"
+                      >
+                        +30 min
+                      </button>
+                      <button
+                        onClick={() => postponeBlock(block.id, 60)}
+                        className="text-xs px-2 py-1 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-colors"
+                      >
+                        +1 hora
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -880,11 +885,14 @@ export function Planner() {
             {allTasks.length > 0 && (
               <button
                 onClick={() => {
-                  if (confirm('¿Eliminar TODAS las tareas? Esta acción no se puede deshacer.')) {
-                    notificationService.cancelAllNotifications();
-                    store.deleteAllTasks();
-                    refreshData();
-                  }
+                  setConfirmAction({
+                    message: '¿Eliminar TODAS las tareas? Esta acción no se puede deshacer.',
+                    onConfirm: () => {
+                      notificationService.cancelAllNotifications();
+                      store.deleteAllTasks();
+                      refreshData();
+                    },
+                  });
                 }}
                 className="ml-auto flex items-center gap-1 px-3 py-2 bg-red-900/40 hover:bg-red-800/50 text-red-400 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
               >
@@ -1821,6 +1829,28 @@ export function Planner() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* ── Confirm Dialog ── */}
+      {confirmAction && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
+          <div className="bg-zinc-900 border border-zinc-700 rounded-2xl p-6 max-w-sm w-full space-y-4">
+            <p className="text-sm text-zinc-200 text-center">{confirmAction.message}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setConfirmAction(null)}
+                className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={() => { confirmAction.onConfirm(); setConfirmAction(null); }}
+                className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl font-semibold text-sm transition-colors"
+              >
+                Eliminar
+              </button>
+            </div>
           </div>
         </div>
       )}

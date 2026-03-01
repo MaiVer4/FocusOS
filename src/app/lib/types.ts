@@ -42,8 +42,6 @@ export interface Block {
   date: string; // YYYY-MM-DD
   interruptions: number;
   task?: Task;
-  externalId?: string;      // ID externo (Calendar eventId)
-  source?: 'calendar' | 'manual';  // origen del bloque
 }
 
 export interface DailyMetrics {

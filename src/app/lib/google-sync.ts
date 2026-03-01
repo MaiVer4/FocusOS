@@ -1,8 +1,8 @@
 /**
  * Google Auto-Sync Service
  * Importa automáticamente tareas de Classroom y eventos de Calendar
- * al abrir la app y periódicamente (cada 5 minutos).
- * Usa externalId para evitar duplicados.
+ * al abrir la app y periódicamente (cada 2 minutos).
+ * Usa externalId para evitar duplicados y sincroniza cambios.
  */
 
 import { googleAuth } from './google-auth';
@@ -12,7 +12,7 @@ import { store } from './store';
 import { notificationService } from './notifications';
 import { Task } from './types';
 
-const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutos
+const SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutos
 const LAST_SYNC_KEY = 'focusos_last_sync';
 
 export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error' | 'not-connected';
@@ -20,7 +20,8 @@ export type SyncStatus = 'idle' | 'syncing' | 'success' | 'error' | 'not-connect
 export interface SyncResult {
   status: SyncStatus;
   newTasks: number;
-  newBlocks: number;
+  updatedTasks: number;
+  removedTasks: number;
   error?: string;
   lastSync: string;
 }
@@ -32,7 +33,8 @@ let listeners: Array<(result: SyncResult) => void> = [];
 let lastResult: SyncResult = {
   status: 'idle',
   newTasks: 0,
-  newBlocks: 0,
+  updatedTasks: 0,
+  removedTasks: 0,
   lastSync: localStorage.getItem(LAST_SYNC_KEY) ?? '',
 };
 
@@ -43,8 +45,9 @@ function notify(result: SyncResult) {
 
 // ─── Sync de Classroom ──────────────────────────────────────────────────────
 
-async function syncClassroom(): Promise<{ tasks: number }> {
+async function syncClassroom(): Promise<{ tasks: number; updated: number }> {
   let newCount = 0;
+  let updatedCount = 0;
 
   try {
     const classroomTasks = await getClassroomPendingTasks();
@@ -57,9 +60,17 @@ async function syncClassroom(): Promise<{ tasks: number }> {
       if (existing) {
         // Si fue terminada o aplazada, no re-importar
         if (existing.status === 'terminada' || existing.status === 'aplazada') continue;
-        // Actualizar fecha si cambió
-        if (existing.dueDate !== ct.dueDate) {
-          store.updateTask(existing.id, { dueDate: ct.dueDate });
+
+        // Detectar cambios y actualizar
+        const updates: Partial<Task> = {};
+        if (existing.dueDate !== ct.dueDate) updates.dueDate = ct.dueDate;
+        if (existing.subject !== ct.title) updates.subject = ct.title;
+        if (existing.description !== ct.description) updates.description = ct.description;
+        if (existing.category !== ct.courseName) updates.category = ct.courseName;
+
+        if (Object.keys(updates).length > 0) {
+          store.updateTask(existing.id, updates);
+          updatedCount++;
         }
         continue;
       }
@@ -93,28 +104,63 @@ async function syncClassroom(): Promise<{ tasks: number }> {
     console.warn('[Sync] Classroom error:', err);
   }
 
-  return { tasks: newCount };
+  return { tasks: newCount, updated: updatedCount };
 }
 
 // ─── Sync de Calendar ───────────────────────────────────────────────────────
 
-async function syncCalendar(): Promise<{ tasks: number }> {
+async function syncCalendar(): Promise<{ tasks: number; updated: number; removed: number }> {
   let newTasks = 0;
+  let updated = 0;
+  let removed = 0;
 
   try {
     const events = await getCalendarEvents();
 
+    // Set con los IDs externos de todos los eventos actuales
+    const currentExtIds = new Set(events.map(ev => `calendar:${ev.id}`));
+
+    // Eliminar tareas de Calendar que ya no existen en Google Calendar
+    const calendarTasks = store.getTasksBySource('calendar');
+    for (const task of calendarTasks) {
+      if (task.externalId && !currentExtIds.has(task.externalId)) {
+        // Solo eliminar si no fue completada por el usuario
+        if (task.status !== 'terminada') {
+          store.deleteTask(task.id);
+          removed++;
+        }
+      }
+    }
+
+    // Importar eventos nuevos o actualizar existentes
     for (const ev of events) {
       const extId = `calendar:${ev.id}`;
-
-      // ¿Ya existe como tarea?
-      if (store.findTaskByExternalId(extId)) continue;
-
-      // Todos los eventos se importan como tareas
       const dueDate = ev.isAllDay || !ev.startTime
         ? ev.date
         : `${ev.date}T${ev.startTime}`;
 
+      // ¿Ya existe como tarea?
+      const existing = store.findTaskByExternalId(extId);
+      if (existing) {
+        // Si fue terminada o aplazada, no tocar
+        if (existing.status === 'terminada' || existing.status === 'aplazada') continue;
+
+        // Detectar cambios y actualizar
+        const newNotes = ev.location ? `📍 ${ev.location}` : '';
+        const updates: Partial<Task> = {};
+        if (existing.subject !== ev.title) updates.subject = ev.title;
+        if (existing.description !== ev.description) updates.description = ev.description;
+        if (existing.dueDate !== dueDate) updates.dueDate = dueDate;
+        if ((existing.notes ?? '') !== newNotes) updates.notes = newNotes;
+
+        if (Object.keys(updates).length > 0) {
+          store.updateTask(existing.id, updates);
+          updated++;
+        }
+        continue;
+      }
+
+      // Todos los eventos se importan como tareas
       const task: Task = {
         id: crypto.randomUUID(),
         subject: ev.title,
@@ -136,22 +182,26 @@ async function syncCalendar(): Promise<{ tasks: number }> {
     console.warn('[Sync] Calendar error:', err);
   }
 
-  return { tasks: newTasks };
+  return { tasks: newTasks, updated, removed };
 }
 
 // ─── Función principal de sync ──────────────────────────────────────────────
 
 async function runSync(): Promise<SyncResult> {
-  // Si no hay token, no sincronizar (el usuario no se ha conectado)
+  // Si no hay token, intentar renovar automáticamente
   if (!googleAuth.isAuthenticated()) {
-    const result: SyncResult = {
-      status: 'not-connected',
-      newTasks: 0,
-      newBlocks: 0,
-      lastSync: lastResult.lastSync,
-    };
-    notify(result);
-    return result;
+    const renewed = await googleAuth.tryAutoRenew();
+    if (!renewed) {
+      const result: SyncResult = {
+        status: 'not-connected',
+        newTasks: 0,
+        updatedTasks: 0,
+        removedTasks: 0,
+        lastSync: lastResult.lastSync,
+      };
+      notify(result);
+      return result;
+    }
   }
 
   notify({ ...lastResult, status: 'syncing' });
@@ -168,7 +218,8 @@ async function runSync(): Promise<SyncResult> {
     const result: SyncResult = {
       status: 'success',
       newTasks: classroom.tasks + calendar.tasks,
-      newBlocks: 0,
+      updatedTasks: classroom.updated + calendar.updated,
+      removedTasks: calendar.removed,
       lastSync: now,
     };
     notify(result);
@@ -177,7 +228,8 @@ async function runSync(): Promise<SyncResult> {
     const result: SyncResult = {
       status: 'error',
       newTasks: 0,
-      newBlocks: 0,
+      updatedTasks: 0,
+      removedTasks: 0,
       error: err instanceof Error ? err.message : 'Error desconocido',
       lastSync: lastResult.lastSync,
     };

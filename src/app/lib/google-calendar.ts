@@ -51,6 +51,19 @@ async function apiFetch<T>(url: string): Promise<T> {
   return res.json();
 }
 
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Limpia la descripción de texto basura inyectado por Google Tasks */
+function cleanCalendarDescription(raw: string): string {
+  if (!raw) return '';
+  // Eliminar el bloque de Google Tasks: "No se guardarán los cambios..."
+  const cleaned = raw
+    .replace(/No se guardarán los cambios[^\n]*https:\/\/tasks\.google\.com\/task\/[^\s]*/gs, '')
+    .replace(/Edits to the title, description[^\n]*https:\/\/tasks\.google\.com\/task\/[^\s]*/gs, '')
+    .trim();
+  return cleaned;
+}
+
 // ─── Función principal ────────────────────────────────────────────────────────
 
 /**
@@ -102,7 +115,7 @@ export async function getCalendarEvents(): Promise<CalendarEventItem[]> {
       return {
         id: ev.id,
         title: ev.summary || '(Sin título)',
-        description: ev.description ?? '',
+        description: cleanCalendarDescription(ev.description ?? ''),
         date,
         startTime,
         endTime,

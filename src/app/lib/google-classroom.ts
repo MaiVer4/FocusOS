@@ -155,6 +155,9 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         : (sub.creationTime ? new Date(sub.creationTime).getFullYear() : 0);
       if (assignedYear < 2026) continue;
 
+      // Ficha 3231660 ADSO: solo tareas desde el 1 de marzo de 2026
+      if (course.name.includes('3231660') && assignedDate && assignedDate < '2026-03-01') continue;
+
       const title = cw.title;
       const description = cw.description ?? '';
 

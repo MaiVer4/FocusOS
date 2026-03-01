@@ -13,6 +13,10 @@ const SCOPES = [
   'https://www.googleapis.com/auth/calendar.events.readonly',
 ].join(' ');
 
+const TOKEN_KEY = 'focusos_google_token';
+const TOKEN_EXPIRY_KEY = 'focusos_google_token_expiry';
+const CONNECTED_KEY = 'focusos_google_connected';
+
 declare global {
   interface Window {
     google?: {
@@ -48,6 +52,23 @@ class GoogleAuth {
   private tokenExpiry: number = 0;
   private tokenClient: TokenClient | null = null;
 
+  constructor() {
+    // Restaurar token de localStorage
+    const savedToken = localStorage.getItem(TOKEN_KEY);
+    const savedExpiry = localStorage.getItem(TOKEN_EXPIRY_KEY);
+    if (savedToken && savedExpiry) {
+      const expiry = parseInt(savedExpiry, 10);
+      if (Date.now() < expiry) {
+        this.accessToken = savedToken;
+        this.tokenExpiry = expiry;
+      } else {
+        // Token expirado, limpiar pero mantener flag de "conectado"
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(TOKEN_EXPIRY_KEY);
+      }
+    }
+  }
+
   /** Verifica si la librería GIS está cargada */
   isReady(): boolean {
     return !!window.google?.accounts?.oauth2;
@@ -58,9 +79,23 @@ class GoogleAuth {
     return !!this.accessToken && Date.now() < this.tokenExpiry;
   }
 
+  /** Verifica si el usuario se conectó alguna vez (aunque el token haya expirado) */
+  wasConnected(): boolean {
+    return localStorage.getItem(CONNECTED_KEY) === 'true';
+  }
+
   /** Obtiene el token actual */
   getAccessToken(): string | null {
     return this.isAuthenticated() ? this.accessToken : null;
+  }
+
+  /** Guarda el token en memoria y localStorage */
+  private saveToken(token: string, expiresIn: number): void {
+    this.accessToken = token;
+    this.tokenExpiry = Date.now() + expiresIn * 1000;
+    localStorage.setItem(TOKEN_KEY, token);
+    localStorage.setItem(TOKEN_EXPIRY_KEY, String(this.tokenExpiry));
+    localStorage.setItem(CONNECTED_KEY, 'true');
   }
 
   /** Solicita acceso al usuario vía popup OAuth2 */
@@ -84,8 +119,7 @@ class GoogleAuth {
             reject(new Error(response.error));
             return;
           }
-          this.accessToken = response.access_token;
-          this.tokenExpiry = Date.now() + response.expires_in * 1000;
+          this.saveToken(response.access_token, response.expires_in);
           resolve(response.access_token);
         },
         error_callback: (error) => {
@@ -93,17 +127,39 @@ class GoogleAuth {
         },
       });
 
-      this.tokenClient.requestAccessToken({ prompt: forceConsent ? 'consent' : '' });
+      this.tokenClient.requestAccessToken({
+        prompt: forceConsent ? 'consent' : '',
+      });
     });
+  }
+
+  /**
+   * Intenta renovar el token de forma silenciosa (sin popup).
+   * Solo funciona si el usuario ya dio consentimiento antes.
+   * Devuelve true si se renovó exitosamente.
+   */
+  async tryAutoRenew(): Promise<boolean> {
+    if (this.isAuthenticated()) return true;
+    if (!this.wasConnected() || !this.isReady()) return false;
+
+    try {
+      await this.authenticate(false); // prompt: '' = sin popup si ya hay consent
+      return this.isAuthenticated();
+    } catch {
+      return false;
+    }
   }
 
   /** Cierra sesión y revoca el token */
   signOut(): void {
     if (this.accessToken) {
       window.google?.accounts.oauth2.revoke(this.accessToken);
-      this.accessToken = null;
-      this.tokenExpiry = 0;
     }
+    this.accessToken = null;
+    this.tokenExpiry = 0;
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(TOKEN_EXPIRY_KEY);
+    localStorage.removeItem(CONNECTED_KEY);
   }
 }
 
