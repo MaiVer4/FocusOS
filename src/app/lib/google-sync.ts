@@ -10,8 +10,7 @@ import { getClassroomPendingTasks } from './google-classroom';
 import { getCalendarEvents } from './google-calendar';
 import { store } from './store';
 import { notificationService } from './notifications';
-import { durationBetween } from './helpers';
-import { Block, Task } from './types';
+import { Task } from './types';
 
 const SYNC_INTERVAL = 5 * 60 * 1000; // 5 minutos
 const LAST_SYNC_KEY = 'focusos_last_sync';
@@ -98,9 +97,8 @@ async function syncClassroom(): Promise<{ tasks: number }> {
 
 // ─── Sync de Calendar ───────────────────────────────────────────────────────
 
-async function syncCalendar(): Promise<{ tasks: number; blocks: number }> {
+async function syncCalendar(): Promise<{ tasks: number }> {
   let newTasks = 0;
-  let newBlocks = 0;
 
   try {
     const events = await getCalendarEvents();
@@ -108,61 +106,36 @@ async function syncCalendar(): Promise<{ tasks: number; blocks: number }> {
     for (const ev of events) {
       const extId = `calendar:${ev.id}`;
 
-      // ¿Ya existe como bloque?
-      if (store.findBlockByExternalId(extId)) continue;
       // ¿Ya existe como tarea?
       if (store.findTaskByExternalId(extId)) continue;
 
-      if (!ev.isAllDay && ev.startTime && ev.endTime) {
-        // Evento con hora → crear bloque
-        const duration = durationBetween(ev.startTime, ev.endTime);
-        if (duration <= 0) continue;
+      // Todos los eventos se importan como tareas
+      const dueDate = ev.isAllDay || !ev.startTime
+        ? ev.date
+        : `${ev.date}T${ev.startTime}`;
 
-        const block: Block = {
-          id: crypto.randomUUID(),
-          date: ev.date,
-          startTime: ev.startTime,
-          endTime: ev.endTime,
-          type: 'light',
-          label: ev.title,
-          priority: 'medium',
-          status: 'pending',
-          duration,
-          interruptions: 0,
-          externalId: extId,
-          source: 'calendar',
-        };
-        store.addBlock(block);
-        newBlocks++;
-
-        if (notificationService.hasPermission()) {
-          notificationService.scheduleBlockNotifications(block);
-        }
-      } else {
-        // Evento de día completo → crear tarea
-        const task: Task = {
-          id: crypto.randomUUID(),
-          subject: ev.title,
-          description: ev.description,
-          notes: ev.location ? `📍 ${ev.location}` : '',
-          category: 'Calendario',
-          dueDate: ev.date,
-          difficulty: 'medium',
-          status: 'sin-iniciar',
-          isDeliverable: false,
-          externalId: extId,
-          source: 'calendar',
-          createdAt: new Date().toISOString(),
-        };
-        store.addTask(task);
-        newTasks++;
-      }
+      const task: Task = {
+        id: crypto.randomUUID(),
+        subject: ev.title,
+        description: ev.description,
+        notes: ev.location ? `📍 ${ev.location}` : '',
+        category: 'Calendario',
+        dueDate,
+        difficulty: 'medium',
+        status: 'sin-iniciar',
+        isDeliverable: false,
+        externalId: extId,
+        source: 'calendar',
+        createdAt: new Date().toISOString(),
+      };
+      store.addTask(task);
+      newTasks++;
     }
   } catch (err) {
     console.warn('[Sync] Calendar error:', err);
   }
 
-  return { tasks: newTasks, blocks: newBlocks };
+  return { tasks: newTasks };
 }
 
 // ─── Función principal de sync ──────────────────────────────────────────────
@@ -194,7 +167,7 @@ async function runSync(): Promise<SyncResult> {
     const result: SyncResult = {
       status: 'success',
       newTasks: classroom.tasks + calendar.tasks,
-      newBlocks: calendar.blocks,
+      newBlocks: 0,
       lastSync: now,
     };
     notify(result);
