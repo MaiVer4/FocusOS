@@ -830,64 +830,67 @@ export function Planner() {
       {/* ── Tasks Tab ── */}
       {activeTab === 'tasks' && (
         <div className="space-y-3">
+          {/* Header: título + botón agregar */}
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold">Tareas</h2>
-            <div className="flex gap-2">
-              {allTasks.length > 0 && (
-                <button
-                  onClick={() => {
-                    if (confirm('¿Eliminar TODAS las tareas? Esta acción no se puede deshacer.')) {
-                      notificationService.cancelAllNotifications();
-                      store.deleteAllTasks();
-                      refreshData();
-                    }
-                  }}
-                  className="px-3 py-2 bg-red-900/50 hover:bg-red-800/60 text-red-400 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                >
-                  <Trash2 className="size-3.5" /> Borrar todo
-                </button>
-              )}
+            <button
+              onClick={() => setShowAddTask(true)}
+              className="p-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+            >
+              <Plus className="size-5" />
+            </button>
+          </div>
+
+          {/* Barra de acciones */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1 -mb-1 scrollbar-none">
+            <button
+              onClick={() => { setClassroomTasks([]); setClassroomError(null); setShowClassroom(true); }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                classroomConnected
+                  ? 'bg-green-600 hover:bg-green-700'
+                  : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+              }`}
+            >
+              <span className="relative">
+                <GraduationCap className="size-3.5" />
+                <span className={`absolute -top-1 -right-1 size-2 rounded-full border border-zinc-900 ${
+                  classroomConnected ? 'bg-green-400' : 'bg-red-400'
+                }`} />
+              </span>
+              Classroom
+            </button>
+            <button
+              onClick={() => { setCalendarEvents([]); setCalendarError(null); setShowCalendar(true); }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
+                classroomConnected
+                  ? 'bg-blue-600 hover:bg-blue-700'
+                  : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+              }`}
+            >
+              <CalendarDays className="size-3.5" />
+              Calendar
+            </button>
+            <button
+              onClick={() => { setSmartItems(null); setSmartText(''); setShowSmartImport(true); }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
+            >
+              <Sparkles className="size-3.5" />
+              IA
+            </button>
+            {allTasks.length > 0 && (
               <button
-                onClick={() => { setClassroomTasks([]); setClassroomError(null); setShowClassroom(true); }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                  classroomConnected
-                    ? 'bg-green-600 hover:bg-green-700'
-                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
-                }`}
+                onClick={() => {
+                  if (confirm('¿Eliminar TODAS las tareas? Esta acción no se puede deshacer.')) {
+                    notificationService.cancelAllNotifications();
+                    store.deleteAllTasks();
+                    refreshData();
+                  }
+                }}
+                className="ml-auto flex items-center gap-1 px-3 py-2 bg-red-900/40 hover:bg-red-800/50 text-red-400 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap"
               >
-                <span className="relative">
-                  <GraduationCap className="size-3.5" />
-                  <span className={`absolute -top-1 -right-1 size-2 rounded-full border border-zinc-900 ${
-                    classroomConnected ? 'bg-green-400' : 'bg-red-400'
-                  }`} />
-                </span>
-                Classroom
+                <Trash2 className="size-3.5" />
               </button>
-              <button
-                onClick={() => { setCalendarEvents([]); setCalendarError(null); setShowCalendar(true); }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                  classroomConnected
-                    ? 'bg-blue-600 hover:bg-blue-700'
-                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
-                }`}
-              >
-                <CalendarDays className="size-3.5" />
-                Calendar
-              </button>
-              <button
-                onClick={() => { setSmartItems(null); setSmartText(''); setShowSmartImport(true); }}
-                className="flex items-center gap-1.5 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg text-xs font-semibold transition-colors"
-              >
-                <Sparkles className="size-3.5" />
-                IA
-              </button>
-              <button
-                onClick={() => setShowAddTask(true)}
-                className="p-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-              >
-                <Plus className="size-5" />
-              </button>
-            </div>
+            )}
           </div>
 
           {allTasks.length === 0 ? (
