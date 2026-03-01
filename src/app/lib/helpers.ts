@@ -193,3 +193,4 @@ export function scoreBarColor(score: number): string {
   if (score >= 70) return 'bg-yellow-500';
   return 'bg-red-500';
 }
+qui

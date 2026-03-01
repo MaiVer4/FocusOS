@@ -149,6 +149,16 @@ class Store {
     return this.tasks.find(t => t.id === id);
   }
 
+  /** Busca una tarea por su ID externo (Classroom/Calendar) */
+  findTaskByExternalId(externalId: string): Task | undefined {
+    return this.tasks.find(t => t.externalId === externalId);
+  }
+
+  /** Busca un bloque por su ID externo (Calendar) */
+  findBlockByExternalId(externalId: string): Block | undefined {
+    return this.blocks.find(b => b.externalId === externalId);
+  }
+
   addTask(task: Task): void {
     this.tasks = [...this.tasks, task];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);

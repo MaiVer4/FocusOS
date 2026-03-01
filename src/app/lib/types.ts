@@ -22,6 +22,8 @@ export interface Task {
   difficulty: Difficulty;
   status: TaskStatus;
   isDeliverable?: boolean;  // true = entrega de evidencia, false = repaso/personal
+  externalId?: string;      // ID externo (Classroom courseworkId o Calendar eventId)
+  source?: 'classroom' | 'calendar' | 'manual';  // origen de la tarea
   createdAt: string;
   completedAt?: string;
 }
@@ -39,6 +41,8 @@ export interface Block {
   date: string; // YYYY-MM-DD
   interruptions: number;
   task?: Task;
+  externalId?: string;      // ID externo (Calendar eventId)
+  source?: 'calendar' | 'manual';  // origen del bloque
 }
 
 export interface DailyMetrics {

@@ -18,10 +18,11 @@ import {
   todayStr,
   formatDateDisplay,
 } from '../lib/helpers';
-import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap, CalendarDays } from 'lucide-react';
+import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap, CalendarDays, RefreshCw } from 'lucide-react';
 import { googleAuth } from '../lib/google-auth';
 import { getClassroomPendingTasks, ClassroomTask } from '../lib/google-classroom';
 import { getCalendarEvents, CalendarEventItem } from '../lib/google-calendar';
+import { googleSync, SyncResult } from '../lib/google-sync';
 
 export function Planner() {
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -49,6 +50,7 @@ export function Planner() {
   const [calendarLoading, setCalendarLoading] = useState(false);
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [calendarImportAs, setCalendarImportAs] = useState<'blocks' | 'tasks'>('blocks');
+  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -77,6 +79,38 @@ export function Planner() {
     setClassroomConnected(googleAuth.isAuthenticated());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
+
+  // ─── Auto-Sync con Google ────────────────────────────────────────────────
+
+  useEffect(() => {
+    const unsub = googleSync.subscribe((result) => {
+      setSyncResult(result);
+      if (result.status === 'success' && (result.newTasks > 0 || result.newBlocks > 0)) {
+        refreshData();
+      }
+    });
+    // Iniciar auto-sync si está autenticado
+    if (googleAuth.isAuthenticated()) {
+      googleSync.startAutoSync();
+    }
+    return () => { unsub(); googleSync.stopAutoSync(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleManualSync = async () => {
+    if (!googleAuth.isAuthenticated()) {
+      try {
+        await googleAuth.authenticate(true);
+        setClassroomConnected(true);
+        googleSync.startAutoSync();
+      } catch {
+        return;
+      }
+    } else {
+      await googleSync.sync();
+    }
+    refreshData();
+  };
 
   // ─── Daily Setup ──────────────────────────────────────────────────────────────
 
@@ -578,6 +612,41 @@ export function Planner() {
         </p>
       </div>
 
+      {/* Sync Status */}
+      {syncResult && syncResult.status !== 'idle' && (
+        <div className={`flex items-center gap-2 rounded-xl px-3 py-2 text-xs ${
+          syncResult.status === 'syncing'
+            ? 'bg-blue-900/20 border border-blue-800/30 text-blue-400'
+            : syncResult.status === 'success'
+              ? 'bg-green-900/20 border border-green-800/30 text-green-400'
+              : syncResult.status === 'error'
+                ? 'bg-red-900/20 border border-red-800/30 text-red-400'
+                : 'bg-zinc-800 border border-zinc-700 text-zinc-400'
+        }`}>
+          {syncResult.status === 'syncing' && (
+            <><Loader2 className="size-3 animate-spin" /> Sincronizando con Google...</>
+          )}
+          {syncResult.status === 'success' && (
+            <>
+              <GraduationCap className="size-3" />
+              <CalendarDays className="size-3" />
+              {syncResult.newTasks > 0 || syncResult.newBlocks > 0
+                ? `+${syncResult.newTasks} tareas, +${syncResult.newBlocks} bloques importados`
+                : 'Todo sincronizado'}
+              <span className="ml-auto text-zinc-500">
+                {syncResult.lastSync && new Date(syncResult.lastSync).toLocaleTimeString('es-CO', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </>
+          )}
+          {syncResult.status === 'error' && (
+            <><span>Error al sincronizar</span> <button onClick={handleManualSync} className="ml-auto underline">Reintentar</button></>
+          )}
+          {syncResult.status === 'not-connected' && (
+            <><span>No conectado a Google</span> <button onClick={handleManualSync} className="ml-auto text-blue-400 underline">Conectar</button></>
+          )}
+        </div>
+      )}
+
       {/* Date Selector */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
         <label className="block text-xs text-zinc-500 mb-2 uppercase tracking-wider">Fecha</label>
@@ -761,31 +830,18 @@ export function Planner() {
                 </button>
               )}
               <button
-                onClick={() => { setClassroomTasks([]); setClassroomError(null); setShowClassroom(true); }}
+                onClick={handleManualSync}
+                disabled={syncResult?.status === 'syncing'}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                  classroomConnected
-                    ? 'bg-green-600 hover:bg-green-700'
-                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
+                  syncResult?.status === 'syncing'
+                    ? 'bg-zinc-700 text-zinc-400 cursor-wait'
+                    : classroomConnected
+                      ? 'bg-green-600 hover:bg-green-700'
+                      : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
                 }`}
               >
-                <span className="relative">
-                  <GraduationCap className="size-3.5" />
-                  <span className={`absolute -top-1 -right-1 size-2 rounded-full border border-zinc-900 ${
-                    classroomConnected ? 'bg-green-400' : 'bg-red-400'
-                  }`} />
-                </span>
-                Classroom
-              </button>
-              <button
-                onClick={() => { setCalendarEvents([]); setCalendarError(null); setShowCalendar(true); }}
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
-                  classroomConnected
-                    ? 'bg-blue-600 hover:bg-blue-700'
-                    : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'
-                }`}
-              >
-                <CalendarDays className="size-3.5" />
-                Calendar
+                <RefreshCw className={`size-3.5 ${syncResult?.status === 'syncing' ? 'animate-spin' : ''}`} />
+                {syncResult?.status === 'syncing' ? 'Sync...' : classroomConnected ? 'Sync' : 'Conectar Google'}
               </button>
               <button
                 onClick={() => { setSmartItems(null); setSmartText(''); setShowSmartImport(true); }}
@@ -832,6 +888,16 @@ export function Planner() {
                         {isOverdue && (
                           <span className="text-xs px-1.5 py-0.5 rounded-full bg-red-600/20 text-red-400 flex-shrink-0">
                             Vencida
+                          </span>
+                        )}
+                        {task.source === 'classroom' && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-green-600/10 text-green-500 flex items-center gap-0.5 flex-shrink-0">
+                            <GraduationCap className="size-3" />
+                          </span>
+                        )}
+                        {task.source === 'calendar' && (
+                          <span className="text-xs px-1.5 py-0.5 rounded-full bg-blue-600/10 text-blue-500 flex items-center gap-0.5 flex-shrink-0">
+                            <CalendarDays className="size-3" />
                           </span>
                         )}
                       </div>
