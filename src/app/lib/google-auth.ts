@@ -9,6 +9,7 @@ const CLIENT_ID = '470733236827-6d756k50hohamsq3hhur273f13f99167.apps.googleuser
 // Scopes necesarios (solo los que están disponibles en la consola)
 const SCOPES = [
   'https://www.googleapis.com/auth/classroom.courses.readonly',
+  'https://www.googleapis.com/auth/classroom.coursework.me.readonly',
   'https://www.googleapis.com/auth/classroom.student-submissions.me.readonly',
   'https://www.googleapis.com/auth/calendar.events.readonly',
 ].join(' ');
