@@ -103,7 +103,23 @@ export async function getMySubmissions(courseId: string): Promise<ClassroomSubmi
   return data.studentSubmissions ?? [];
 }
 
-/** Intenta obtener detalles de un coursework individual (puede fallar si no hay scope) */
+/** Intenta listar todo el coursework de un curso (batch, más eficiente) */
+async function listCoursework(courseId: string): Promise<ClassroomCoursework[]> {
+  try {
+    const data = await apiFetch<{ courseWork?: ClassroomCoursework[] }>(
+      `${BASE}/courses/${courseId}/courseWork?pageSize=100`
+    );
+    return data.courseWork ?? [];
+  } catch {
+    // Fallback: intentar con apiFetchSafe por si falla el scope
+    const data = await apiFetchSafe<{ courseWork?: ClassroomCoursework[] }>(
+      `${BASE}/courses/${courseId}/courseWork?pageSize=100`
+    );
+    return data?.courseWork ?? [];
+  }
+}
+
+/** Fallback: obtener un coursework individual */
 async function getCourseworkDetails(courseId: string, courseworkId: string): Promise<ClassroomCoursework | null> {
   return apiFetchSafe<ClassroomCoursework>(
     `${BASE}/courses/${courseId}/courseWork/${courseworkId}`
@@ -113,8 +129,10 @@ async function getCourseworkDetails(courseId: string, courseworkId: string): Pro
 // ─── Función principal: obtener tareas pendientes ─────────────────────────────
 
 /**
- * Obtiene las tareas pendientes usando submissions (que SÍ tenemos scope).
- * Luego intenta enriquecer con datos de coursework (si hay scope, los agrega).
+ * Obtiene las tareas pendientes.
+ * 1. Lista submissions pendientes del usuario.
+ * 2. Carga TODOS los coursework del curso en batch (incluye description).
+ * 3. Cruza submissions con coursework para armar las tareas.
  */
 export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
   const courses = await getCourses();
@@ -128,12 +146,21 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
       s => s.state === 'NEW' || s.state === 'CREATED'
     );
 
+    if (pending.length === 0) continue;
+
+    // Cargar todo el coursework del curso en UNA llamada (incluye description)
+    const allCoursework = await listCoursework(course.id);
+    const cwMap = new Map<string, ClassroomCoursework>();
+    for (const cw of allCoursework) cwMap.set(cw.id, cw);
+
     for (const sub of pending) {
-      // Intentar obtener detalles del coursework
-      const cw = await getCourseworkDetails(course.id, sub.courseWorkId);
+      // Buscar en el mapa batch, fallback a individual si no está
+      let cw = cwMap.get(sub.courseWorkId) ?? null;
+      if (!cw) {
+        cw = await getCourseworkDetails(course.id, sub.courseWorkId);
+      }
 
       // Si no podemos obtener los detalles del coursework, saltar
-      // (no tenemos título ni fecha real — no vale la pena importar basura)
       if (!cw) continue;
 
       // Fecha de asignación: creationTime del coursework o del submission
