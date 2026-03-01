@@ -134,14 +134,15 @@ export function Planner() {
 
     // Si la plantilla no generó bloques (ya existen), generar para tareas sin asignar
     if (templateBlocks.length === 0) {
-      const taskBlocks = store.generateBlocksFromTasks(selectedDate);
-      if (notificationService.hasPermission()) {
-        taskBlocks.forEach(b => notificationService.scheduleBlockNotifications(b));
-      }
-    } else {
-      if (notificationService.hasPermission()) {
-        templateBlocks.forEach(b => notificationService.scheduleBlockNotifications(b));
-      }
+      store.generateBlocksFromTasks(selectedDate);
+    }
+
+    // Reorganizar para eliminar solapamientos
+    store.reorganizeBlocks(selectedDate);
+
+    // Reprogramar notificaciones con horarios finales
+    if (notificationService.hasPermission()) {
+      store.getBlocks(selectedDate).forEach(b => notificationService.scheduleBlockNotifications(b));
     }
 
     refreshData();
@@ -184,22 +185,20 @@ export function Planner() {
     };
     store.addTask(task);
 
-    // Auto-crear bloque solo si tiene fecha
+    // Auto-crear bloque y reorganizar si tiene fecha y existen bloques ese día
     if (task.dueDate) {
       const blockDate = task.dueDate.split('T')[0];
-      const settings = store.getSettings();
-      const existingBlocks = store.getBlocks(blockDate)
-        .sort((a, b) => a.endTime.localeCompare(b.endTime));
-
-      const startTime = existingBlocks.length > 0
-        ? addMinutesToTime(existingBlocks[existingBlocks.length - 1].endTime, 10)
-        : settings.arrivalTime;
+      const existingBlocks = store.getBlocks(blockDate);
 
       const duration = task.difficulty === 'high' ? 90
         : task.difficulty === 'medium' ? 60 : 45;
-      const endTime = addMinutesToTime(startTime, duration);
       const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
         : task.difficulty === 'medium' ? 'medium' : 'low';
+
+      // Buscar un hueco libre primero
+      const freeSlot = store.findNextFreeSlot(blockDate, duration, store.getSettings().arrivalTime);
+      const startTime = freeSlot ?? store.getSettings().arrivalTime;
+      const endTime = addMinutesToTime(startTime, duration);
 
       const block: Block = {
         id: crypto.randomUUID(),
@@ -215,13 +214,22 @@ export function Planner() {
         interruptions: 0,
       };
 
+      store.addBlock(block);
+
+      // Si no hubo hueco libre o había bloques previos, reorganizar todo el día
+      if (!freeSlot || existingBlocks.length > 0) {
+        store.reorganizeBlocks(blockDate);
+      }
+
+      // Reprogramar notificaciones con los nuevos horarios
       if (notificationService.hasPermission()) {
-        notificationService.scheduleBlockNotifications(block);
+        store.getBlocks(blockDate).forEach(b => {
+          notificationService.scheduleBlockNotifications(b);
+        });
         if (isDeliverable) {
           notificationService.scheduleDeliverableNotifications(task);
         }
       }
-      store.addBlock(block);
 
       if (blockDate === selectedDate) setActiveTab('blocks');
     }

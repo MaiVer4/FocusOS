@@ -369,6 +369,116 @@ class Store {
     return newBlocks;
   }
 
+  /**
+   * Reorganiza todos los bloques de un día para eliminar solapamientos.
+   * Lógica:
+   *  1. Los bloques ya completados/activos se fijan en su posición.
+   *  2. Los bloques de trabajo (deep/light/exercise) se colocan secuencialmente.
+   *  3. Los bloques rest/low se comprimen o eliminan para hacer espacio.
+   *  4. Orden: alta prioridad primero, luego media, luego baja.
+   */
+  reorganizeBlocks(date: string): void {
+    const dayBlocks = this.getBlocks(date);
+    if (dayBlocks.length <= 1) return;
+
+    // Separar bloques fijos (ya activos/completados) de los pendientes
+    const fixed = dayBlocks.filter(b => b.status === 'completed' || b.status === 'active');
+    const pending = dayBlocks.filter(b => b.status !== 'completed' && b.status !== 'active');
+
+    // Ordenar pendientes: prioridad (high>medium>low), luego tipo (deep>exercise>light>rest)
+    const prioOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
+    const typeOrder: Record<string, number> = { deep: 0, exercise: 1, light: 2, rest: 3 };
+    pending.sort((a, b) => {
+      const pa = prioOrder[a.priority] ?? 2;
+      const pb = prioOrder[b.priority] ?? 2;
+      if (pa !== pb) return pa - pb;
+      const ta = typeOrder[a.type] ?? 3;
+      const tb = typeOrder[b.type] ?? 3;
+      if (ta !== tb) return ta - tb;
+      return a.startTime.localeCompare(b.startTime);
+    });
+
+    // Crear "ocupación" con bloques fijos
+    const occupied = fixed.map(b => ({ start: b.startTime, end: b.endTime }));
+    occupied.sort((a, b) => a.start.localeCompare(b.start));
+
+    // Función para encontrar hueco libre de duración dada después de fromTime
+    const findSlot = (duration: number, fromTime: string): string | null => {
+      let candidate = fromTime;
+      for (const occ of occupied) {
+        const candidateEnd = addMinutesToTime(candidate, duration);
+        if (candidateEnd <= occ.start) return candidate;
+        if (occ.end > candidate) candidate = addMinutesToTime(occ.end, 5);
+      }
+      const finalEnd = addMinutesToTime(candidate, duration);
+      if (finalEnd <= '23:59') return candidate;
+      return null;
+    };
+
+    // Calcular espacio total disponible para saber si hay que comprimir rest blocks
+    const totalFixedMin = fixed.reduce((s, b) => s + durationBetween(b.startTime, b.endTime), 0);
+    const workBlocks = pending.filter(b => b.type !== 'rest' || b.priority !== 'low');
+    const restBlocks = pending.filter(b => b.type === 'rest' && b.priority === 'low');
+    const workMinNeeded = workBlocks.reduce((s, b) => s + b.duration, 0);
+    const restMinOriginal = restBlocks.reduce((s, b) => s + b.duration, 0);
+    const dayAvailable = durationBetween(this.settings.wakeTime, this.settings.sleepTime) - totalFixedMin;
+    const gapMinutes = (workBlocks.length + restBlocks.length) * 5; // 5 min entre bloques
+    const spaceForRest = Math.max(0, dayAvailable - workMinNeeded - gapMinutes);
+
+    // Ratio de compresión para rest blocks
+    const restRatio = restMinOriginal > 0 ? Math.min(1, spaceForRest / restMinOriginal) : 1;
+
+    // Asignar duraciones a rest blocks (mínimo 10 min, o eliminar si < 10)
+    for (const rb of restBlocks) {
+      rb.duration = Math.round(rb.duration * restRatio);
+      if (rb.duration < 10) rb.duration = 0; // se eliminará
+    }
+
+    // Combinar work + rest (filtrar rest con duración 0) y reordenar cronológicamente
+    // Prioridad de colocación: work blocks primero, rest en los gaps
+    const toPlace = [
+      ...workBlocks,
+      ...restBlocks.filter(rb => rb.duration > 0),
+    ];
+
+    // Re-sort: intenta mantener el orden original por startTime
+    toPlace.sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    // Colocar cada bloque
+    const placed: Block[] = [...fixed];
+    const idsToRemove = new Set<string>();
+
+    for (const block of toPlace) {
+      const slot = findSlot(block.duration, this.settings.wakeTime);
+      if (!slot) {
+        // No cabe → eliminarlo si es rest, sino marcarlo para no perderlo
+        if (block.type === 'rest' && block.priority === 'low') {
+          idsToRemove.add(block.id);
+        }
+        continue;
+      }
+      const newEnd = addMinutesToTime(slot, block.duration);
+      block.startTime = slot;
+      block.endTime = newEnd;
+      occupied.push({ start: slot, end: newEnd });
+      occupied.sort((a, b) => a.start.localeCompare(b.start));
+      placed.push(block);
+    }
+
+    // Aplicar cambios al store
+    const placedIds = new Set(placed.map(b => b.id));
+    this.blocks = this.blocks.filter(b => b.date !== date || placedIds.has(b.id));
+    // Actualizar horarios de los bloques reposicionados
+    for (const p of placed) {
+      this.blocks = this.blocks.map(b =>
+        b.id === p.id ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration } : b
+      );
+    }
+    // Eliminar rest blocks que no caben
+    this.blocks = this.blocks.filter(b => !idsToRemove.has(b.id));
+    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+  }
+
   // ─── Blocks ────────────────────────────────────────────────────────────────
 
   getBlocks(date?: string): Block[] {
