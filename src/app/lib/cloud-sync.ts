@@ -280,7 +280,24 @@ class CloudSync {
         const cloudUpdatedAt = cloud.updatedAt;
         const localRaw = localStorage.getItem(storageKey);
         const localData = localRaw ? JSON.parse(localRaw) : null;
-        const localUpdatedAt = this.getLocalUpdatedAt(collection);
+
+        // Determinar si los datos locales son "reales" (no vacíos)
+        const localHasRealData = Array.isArray(localData)
+          ? localData.length > 0
+          : localData !== null && localData !== undefined;
+
+        // Determinar si los datos de la nube son "reales" (no vacíos)
+        const cloudHasRealData = Array.isArray(cloudData)
+          ? cloudData.length > 0
+          : cloudData !== null && cloudData !== undefined;
+
+        // Si no hay META registrado para esta colección pero el local tiene datos,
+        // inicializar el META con el timestamp actual para que future syncs sean correctos.
+        let localUpdatedAt = this.getLocalUpdatedAt(collection);
+        if (localUpdatedAt === 0 && localHasRealData) {
+          localUpdatedAt = Date.now();
+          this.setLocalUpdatedAt(collection, localUpdatedAt);
+        }
 
         if (!cloud.exists && !localData) {
           // Nada que sincronizar
@@ -289,14 +306,22 @@ class CloudSync {
           await saveUserData(collection, localData, DEVICE_ID);
           this.setLocalUpdatedAt(collection, Date.now());
           console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
-        } else if (cloud.exists && !localData) {
+        } else if (cloud.exists && !localHasRealData && cloudHasRealData) {
+          // La nube tiene datos reales pero el local está vacío/nulo → aplicar nube
           localStorage.setItem(storageKey, JSON.stringify(cloudData));
           this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
           console.log(`[CloudSync] ${collection}: cargado de la nube (${cloudUpdatedAt})`);
+        } else if (localHasRealData && !cloudHasRealData) {
+          // El local tiene datos reales pero la nube está vacía → subir local
+          // (protege bloques recién generados que aún no se subieron)
+          await saveUserData(collection, localData, DEVICE_ID);
+          this.setLocalUpdatedAt(collection, Date.now());
+          console.log(`[CloudSync] ${collection}: local tiene datos, nube vacía → subiendo local`);
         } else {
-          // Ambos lados tienen datos: elegir el más reciente.
+          // Ambos lados tienen datos reales: elegir el más reciente.
           if (localUpdatedAt > cloudUpdatedAt) {
             await saveUserData(collection, localData, DEVICE_ID);
+            this.setLocalUpdatedAt(collection, Date.now());
             console.log(`[CloudSync] ${collection}: local más reciente (${localUpdatedAt} > ${cloudUpdatedAt})`);
           } else {
             localStorage.setItem(storageKey, JSON.stringify(cloudData));
