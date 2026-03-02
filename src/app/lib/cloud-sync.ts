@@ -15,6 +15,7 @@ import {
   loadUserData,
   onUserDataChange,
   getFirebaseUser,
+  auth,
 } from './firebase';
 import { googleAuth } from './google-auth';
 import type { Unsubscribe } from 'firebase/firestore';
@@ -47,6 +48,15 @@ class CloudSync {
   private unsubscribers: Unsubscribe[] = [];
   private changeCallbacks: Array<() => void> = [];
 
+  private async waitForRestoredFirebaseSession(timeoutMs = 2500): Promise<boolean> {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < timeoutMs) {
+      if (getFirebaseUser() || auth.currentUser) return true;
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    return !!(getFirebaseUser() || auth.currentUser);
+  }
+
   // ── Pub/Sub para cambios remotos ────────────────────────────────────────
 
   onRemoteChange(fn: () => void): () => void {
@@ -77,23 +87,27 @@ class CloudSync {
     this.pendingUploads = {};
 
     try {
+      // 1) Preferir sesión Firebase ya restaurada (persiste entre recargas)
+      await this.waitForRestoredFirebaseSession();
+      const existingFirebaseUser = getFirebaseUser() ?? auth.currentUser;
+
+      // 2) Si no hay sesión Firebase, intentar sign-in con token GIS
       let token = googleAuth.getAccessToken();
-      if (!token && googleAuth.wasConnected()) {
+      if (!existingFirebaseUser && !token && googleAuth.wasConnected()) {
         const renewed = await googleAuth.tryAutoRenew();
         if (renewed) token = googleAuth.getAccessToken();
       }
-      if (!token) {
+
+      if (!existingFirebaseUser && !token) {
         this.connecting = false;
-        this.scheduleRetry(15_000);
+        if (googleAuth.wasConnected()) {
+          this.scheduleRetry(15_000);
+        }
         return false;
       }
 
-      await signInWithGoogleToken(token);
-
-      if (!getFirebaseUser()) {
-        this.connecting = false;
-        this.scheduleRetry(15_000);
-        return false;
+      if (!existingFirebaseUser && token) {
+        await signInWithGoogleToken(token);
       }
 
       // Sync inicial
