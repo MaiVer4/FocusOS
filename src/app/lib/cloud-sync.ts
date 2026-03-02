@@ -137,6 +137,18 @@ class CloudSync {
         await signInWithGoogleToken(token);
       }
 
+      // Confirmar que ya hay sesión Firebase activa antes de acceder a Firestore
+      const activeUser = getFirebaseUser() ?? auth.currentUser;
+      if (!activeUser) {
+        this.connecting = false;
+        if (googleAuth.wasConnected()) {
+          this.scheduleRetry(15_000);
+        } else {
+          this.setStatus('disconnected');
+        }
+        return false;
+      }
+
       // Sync inicial
       await this.initialSync();
 

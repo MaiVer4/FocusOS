@@ -50,6 +50,10 @@ const auth = getAuth(app);
 let currentUser: User | null = null;
 let authListeners: Array<(user: User | null) => void> = [];
 
+function getActiveUser(): User | null {
+  return currentUser ?? auth.currentUser;
+}
+
 onAuthStateChanged(auth, (user) => {
   currentUser = user;
   authListeners.forEach(fn => fn(user));
@@ -71,12 +75,12 @@ export function signOutFirebase(): Promise<void> {
 }
 
 export function getFirebaseUser(): User | null {
-  return currentUser;
+  return getActiveUser();
 }
 
 export function onFirebaseAuth(fn: (user: User | null) => void): () => void {
   authListeners.push(fn);
-  fn(currentUser);
+  fn(getActiveUser());
   return () => {
     authListeners = authListeners.filter(l => l !== fn);
   };
@@ -90,8 +94,9 @@ export async function saveUserData(
   data: unknown,
   deviceId?: string,
 ): Promise<void> {
-  if (!currentUser) return;
-  const ref = doc(db, 'users', currentUser.uid, 'data', collection);
+  const user = getActiveUser();
+  if (!user) return;
+  const ref = doc(db, 'users', user.uid, 'data', collection);
   await setDoc(ref, { value: data, updatedAt: Date.now(), deviceId: deviceId ?? '' });
 }
 
@@ -99,8 +104,9 @@ export async function saveUserData(
 export async function loadUserData<T>(
   collection: string,
 ): Promise<T | null> {
-  if (!currentUser) return null;
-  const ref = doc(db, 'users', currentUser.uid, 'data', collection);
+  const user = getActiveUser();
+  if (!user) return null;
+  const ref = doc(db, 'users', user.uid, 'data', collection);
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
   return snap.data().value as T;
@@ -114,8 +120,9 @@ export function onUserDataChange<T>(
   collection: string,
   callback: (data: T | null, updatedAt: number, deviceId?: string) => void,
 ): Unsubscribe {
-  if (!currentUser) return () => {};
-  const ref = doc(db, 'users', currentUser.uid, 'data', collection);
+  const user = getActiveUser();
+  if (!user) return () => {};
+  const ref = doc(db, 'users', user.uid, 'data', collection);
   return onSnapshot(ref, (snap) => {
     if (!snap.exists()) {
       callback(null, 0);
