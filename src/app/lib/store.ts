@@ -778,28 +778,33 @@ class Store {
   }
 
   /**
-    * Elimina bloques de hoy que terminaron hace más de 30 minutos.
-    *
-    * Importante: NO elimina bloques `pending` para evitar que la planificación
-    * desaparezca al recargar la app (caso común al generar rutina automática).
+   * Limpia bloques de días ANTERIORES al día actual que ya están en estado terminal
+   * (completados o fallados) con más de 2 días de antigüedad, para evitar acumulación.
+   *
+   * Los bloques del DÍA ACTUAL nunca se eliminan automáticamente —
+   * el usuario debe verlos todo el día sin importar su estado o si su hora ya pasó.
+   *
    * Devuelve la cantidad de bloques eliminados.
    */
   cleanExpiredBlocks(): number {
     const now = new Date();
     const today = dateToStr(now);
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const grace = 30; // minutos de gracia después de endTime
+
+    // Calcular el límite: días anteriores a antes de ayer
+    const twoDaysAgo = new Date(now);
+    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+    const twoDaysAgoStr = dateToStr(twoDaysAgo);
 
     const before = this.blocks.length;
     this.blocks = this.blocks.filter(b => {
-      if (b.date !== today) return true; // no tocar bloques de otros días
+      // Nunca tocar los bloques de hoy
+      if (b.date >= today) return true;
 
-      // Conservar siempre pendientes: son parte de la planificación del día.
-      if (b.status === 'pending') return true;
+      // Conservar bloques recientes (ayer) sin importar su estado
+      if (b.date > twoDaysAgoStr) return true;
 
-      const [eh, em] = b.endTime.split(':').map(Number);
-      const endMinutes = eh * 60 + em;
-      return currentMinutes < endMinutes + grace; // mantener si aún no han pasado 30 min
+      // Bloques de más de 2 días: solo eliminar los ya terminados
+      return b.status === 'pending' || b.status === 'active';
     });
     const removed = before - this.blocks.length;
     if (removed > 0) {
