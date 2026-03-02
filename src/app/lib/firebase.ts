@@ -87,10 +87,11 @@ export function onFirebaseAuth(fn: (user: User | null) => void): () => void {
 export async function saveUserData(
   collection: string,
   data: unknown,
+  deviceId?: string,
 ): Promise<void> {
   if (!currentUser) return;
   const ref = doc(db, 'users', currentUser.uid, 'data', collection);
-  await setDoc(ref, { value: data, updatedAt: Date.now() });
+  await setDoc(ref, { value: data, updatedAt: Date.now(), deviceId: deviceId ?? '' });
 }
 
 /** Carga datos del usuario desde Firestore */
@@ -110,7 +111,7 @@ export async function loadUserData<T>(
  */
 export function onUserDataChange<T>(
   collection: string,
-  callback: (data: T | null, updatedAt: number) => void,
+  callback: (data: T | null, updatedAt: number, deviceId?: string) => void,
 ): Unsubscribe {
   if (!currentUser) return () => {};
   const ref = doc(db, 'users', currentUser.uid, 'data', collection);
@@ -120,7 +121,7 @@ export function onUserDataChange<T>(
       return;
     }
     const d = snap.data();
-    callback(d.value as T, d.updatedAt ?? 0);
+    callback(d.value as T, d.updatedAt ?? 0, d.deviceId ?? '');
   });
 }
 

@@ -1,11 +1,12 @@
 /**
- * Cloud Sync — Sincronización bidireccional entre localStorage y Firebase Firestore.
+ * Cloud Sync — Sincronización bidireccional localStorage ↔ Firebase Firestore.
  *
  * Arquitectura:
- *  - localStorage es la fuente primaria (rápida, funciona offline).
- *  - Firestore es el respaldo en la nube (sync entre dispositivos).
- *  - Cada escritura local se sube a Firestore (debounced 1.5 s).
- *  - onSnapshot escucha cambios remotos y los baja a localStorage.
+ *  - localStorage = cache rápido, funciona offline.
+ *  - Firestore = fuente de verdad compartida entre dispositivos.
+ *  - Cada escritura local se sube a Firestore (debounced).
+ *  - onSnapshot escucha cambios remotos y los baja.
+ *  - El sync vive a nivel de app, NO se desconecta al cambiar de página.
  */
 
 import {
@@ -14,7 +15,6 @@ import {
   loadUserData,
   onUserDataChange,
   getFirebaseUser,
-  signOutFirebase,
 } from './firebase';
 import { googleAuth } from './google-auth';
 import type { Unsubscribe } from 'firebase/firestore';
@@ -24,7 +24,6 @@ import type { Unsubscribe } from 'firebase/firestore';
 const COLLECTIONS = ['tasks', 'blocks', 'metrics', 'settings'] as const;
 type Collection = (typeof COLLECTIONS)[number];
 
-/** Mapeo colección → clave de localStorage */
 const STORAGE_KEYS: Record<Collection, string> = {
   tasks: 'focusos_tasks',
   blocks: 'focusos_blocks',
@@ -32,22 +31,24 @@ const STORAGE_KEYS: Record<Collection, string> = {
   settings: 'focusos_settings',
 };
 
-const DEBOUNCE_MS = 1500;       // esperar 1.5 s antes de subir
-const ECHO_WINDOW_MS = 3000;    // ignorar escrituras propias dentro de 3 s
+const DEBOUNCE_MS = 800;
+
+// ID único de esta instancia/pestaña para distinguir escrituras propias
+const DEVICE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
 // ─── CloudSync ──────────────────────────────────────────────────────────────
 
 class CloudSync {
   private active = false;
   private connecting = false;
-  private lastWriteTs: Record<string, number> = {};
+  private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private debounceTimers: Record<string, ReturnType<typeof setTimeout>> = {};
+  private pendingUploads: Record<string, unknown> = {};
   private unsubscribers: Unsubscribe[] = [];
   private changeCallbacks: Array<() => void> = [];
 
-  // ── Pub / Sub para cambios remotos ──────────────────────────────────────
+  // ── Pub/Sub para cambios remotos ────────────────────────────────────────
 
-  /** Suscribe a notificaciones de cambio remoto. Devuelve función para desuscribir. */
   onRemoteChange(fn: () => void): () => void {
     this.changeCallbacks.push(fn);
     return () => {
@@ -56,35 +57,27 @@ class CloudSync {
   }
 
   private notifyRemoteChange(): void {
-    this.changeCallbacks.forEach(fn => fn());
+    this.changeCallbacks.forEach(fn => {
+      try { fn(); } catch (e) { console.error('[CloudSync] callback error:', e); }
+    });
   }
 
   // ── Conexión ────────────────────────────────────────────────────────────
 
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /**
-   * Conecta a Firebase con el token de Google existente
-   * y activa sincronización bidireccional.
-   * Si el token está expirado, intenta renovarlo automáticamente.
-   */
   async connect(): Promise<boolean> {
     if (this.active) return true;
     if (this.connecting) return false;
     this.connecting = true;
 
     try {
-      // Obtener token, o renovarlo si expiró
       let token = googleAuth.getAccessToken();
       if (!token && googleAuth.wasConnected()) {
-        console.log('[CloudSync] Token expirado, intentando renovar...');
         const renewed = await googleAuth.tryAutoRenew();
         if (renewed) token = googleAuth.getAccessToken();
       }
       if (!token) {
-        console.warn('[CloudSync] Sin token disponible, reintentando en 10s...');
         this.connecting = false;
-        this.scheduleRetry();
+        this.scheduleRetry(15_000);
         return false;
       }
 
@@ -92,56 +85,75 @@ class CloudSync {
 
       if (!getFirebaseUser()) {
         this.connecting = false;
-        this.scheduleRetry();
+        this.scheduleRetry(15_000);
         return false;
       }
 
-      console.log('[CloudSync] Conectado a Firebase');
-
-      // 1. Sync inicial: nube → local (nube es fuente de verdad)
+      // Sync inicial
       await this.initialSync();
 
-      // 2. Escuchar cambios remotos en tiempo real
+      // Escuchar cambios en tiempo real
       this.startListening();
+
+      // Subir uploads que se acumularon antes de estar activo
+      this.flushPending();
 
       this.active = true;
       this.connecting = false;
+      console.log('[CloudSync] ✅ Conectado (device:', DEVICE_ID, ')');
       return true;
     } catch (e) {
       console.error('[CloudSync] Error de conexión:', e);
       this.connecting = false;
-      this.scheduleRetry();
+      this.scheduleRetry(15_000);
       return false;
     }
   }
 
-  /** Reintenta la conexión después de un delay */
-  private scheduleRetry(): void {
+  private scheduleRetry(delay: number): void {
     if (this.retryTimer) return;
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       this.connect();
-    }, 10_000);
+    }, delay);
   }
 
-  // ── Subida (debounced) ──────────────────────────────────────────────────
+  // ── Subida ──────────────────────────────────────────────────────────────
 
-  /** Sube datos a Firestore con debounce para evitar escrituras rápidas consecutivas. */
+  /**
+   * Encola datos para subir a Firestore.
+   * Si aún no estamos conectados, se acumula y se sube al conectar.
+   */
   uploadDebounced(collection: string, data: unknown): void {
-    if (!this.active) return;
+    // Guardar siempre para flush posterior
+    this.pendingUploads[collection] = data;
 
     if (this.debounceTimers[collection]) {
       clearTimeout(this.debounceTimers[collection]);
     }
 
-    this.debounceTimers[collection] = setTimeout(async () => {
-      try {
-        this.lastWriteTs[collection] = Date.now();
-        await saveUserData(collection, data);
-      } catch (e) {
-        console.error(`[CloudSync] Error subiendo ${collection}:`, e);
-      }
+    this.debounceTimers[collection] = setTimeout(() => {
+      if (!this.active) return; // se subirá en flushPending al conectar
+      this.doUpload(collection, this.pendingUploads[collection]);
+      delete this.pendingUploads[collection];
     }, DEBOUNCE_MS);
+  }
+
+  private async doUpload(collection: string, data: unknown): Promise<void> {
+    try {
+      await saveUserData(collection, data, DEVICE_ID);
+    } catch (e) {
+      console.error(`[CloudSync] Error subiendo ${collection}:`, e);
+    }
+  }
+
+  /** Sube todos los uploads pendientes acumulados antes de conectar */
+  private async flushPending(): Promise<void> {
+    const entries = Object.entries(this.pendingUploads);
+    this.pendingUploads = {};
+    for (const [collection, data] of entries) {
+      await this.doUpload(collection, data);
+    }
   }
 
   // ── Sync inicial ───────────────────────────────────────────────────────
@@ -156,52 +168,38 @@ class CloudSync {
         const localData = localRaw ? JSON.parse(localRaw) : null;
 
         if (cloudData && !localData) {
-          // Nube tiene datos, local vacío → usar nube
           localStorage.setItem(storageKey, JSON.stringify(cloudData));
-          console.log(`[CloudSync] ${collection}: cargado desde la nube`);
+          console.log(`[CloudSync] ${collection}: cargado de la nube`);
         } else if (!cloudData && localData) {
-          // Local tiene datos, nube vacía → subir
-          this.lastWriteTs[collection] = Date.now();
-          await saveUserData(collection, localData);
+          await saveUserData(collection, localData, DEVICE_ID);
           console.log(`[CloudSync] ${collection}: subido a la nube`);
         } else if (cloudData && localData) {
           if (collection === 'settings') {
-            // Settings: merge nube → local (nube gana, local aporta campos nuevos)
             const merged = { ...(localData as object), ...(cloudData as object) };
             localStorage.setItem(storageKey, JSON.stringify(merged));
-            this.lastWriteTs[collection] = Date.now();
-            await saveUserData(collection, merged);
-            console.log(`[CloudSync] ${collection}: merge settings`);
+            await saveUserData(collection, merged, DEVICE_ID);
           } else {
-            // Arrays (tasks, blocks, metrics): merge por ID, local gana en conflictos
             const merged = this.mergeArrays(
               localData as Array<{ id: string }>,
               cloudData as Array<{ id: string }>,
             );
             localStorage.setItem(storageKey, JSON.stringify(merged));
-            this.lastWriteTs[collection] = Date.now();
-            await saveUserData(collection, merged);
-            console.log(`[CloudSync] ${collection}: merge (${merged.length} items)`);
+            await saveUserData(collection, merged, DEVICE_ID);
           }
+          console.log(`[CloudSync] ${collection}: merge completo`);
         }
       } catch (e) {
-        console.error(`[CloudSync] Error sync inicial (${collection}):`, e);
+        console.error(`[CloudSync] Error sync inicial ${collection}:`, e);
       }
     }
 
-    // Notificar a la app para que recargue datos mergeados
     this.notifyRemoteChange();
   }
 
-  /**
-   * Merge dos arrays por ID. Nube gana sobre local para IDs duplicados
-   * (la nube tiene los cambios más recientes de cualquier dispositivo).
-   * Items que solo existen en local se conservan.
-   */
   private mergeArrays<T extends { id: string }>(local: T[], cloud: T[]): T[] {
     const map = new Map<string, T>();
-    for (const item of local) map.set(item.id, item);   // local primero
-    for (const item of cloud) map.set(item.id, item);   // nube sobrescribe duplicados
+    for (const item of local) map.set(item.id, item);
+    for (const item of cloud) map.set(item.id, item); // nube gana
     return Array.from(map.values());
   }
 
@@ -213,21 +211,23 @@ class CloudSync {
     for (const collection of COLLECTIONS) {
       const storageKey = STORAGE_KEYS[collection];
 
-      const unsub = onUserDataChange(collection, (data: unknown, updatedAt: number) => {
-        // Ignorar eco de nuestras propias escrituras
-        const lastWrite = this.lastWriteTs[collection] || 0;
-        if (Math.abs(updatedAt - lastWrite) < ECHO_WINDOW_MS) return;
+      const unsub = onUserDataChange(
+        collection,
+        (data: unknown, _updatedAt: number, writerDeviceId?: string) => {
+          // Ignorar escrituras propias
+          if (writerDeviceId === DEVICE_ID) return;
 
-        if (data !== null && data !== undefined) {
-          try {
-            localStorage.setItem(storageKey, JSON.stringify(data));
-            console.log(`[CloudSync] Cambio remoto: ${collection}`);
-            this.notifyRemoteChange();
-          } catch (e) {
-            console.error(`[CloudSync] Error aplicando remoto ${collection}:`, e);
+          if (data !== null && data !== undefined) {
+            try {
+              localStorage.setItem(storageKey, JSON.stringify(data));
+              console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
+              this.notifyRemoteChange();
+            } catch (e) {
+              console.error(`[CloudSync] Error aplicando ${collection}:`, e);
+            }
           }
-        }
-      });
+        },
+      );
 
       this.unsubscribers.push(unsub);
     }
@@ -238,19 +238,7 @@ class CloudSync {
     this.unsubscribers = [];
   }
 
-  // ── Desconexión ─────────────────────────────────────────────────────────
-
-  disconnect(): void {
-    this.stopListening();
-    Object.values(this.debounceTimers).forEach(t => clearTimeout(t));
-    this.debounceTimers = {};
-    this.lastWriteTs = {};
-    if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
-    this.active = false;
-    this.connecting = false;
-    signOutFirebase().catch(() => {});
-    console.log('[CloudSync] Desconectado');
-  }
+  // ── Lifecycle ───────────────────────────────────────────────────────────
 
   isActive(): boolean {
     return this.active;

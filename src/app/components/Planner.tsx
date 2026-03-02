@@ -122,23 +122,17 @@ export function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Cloud Sync (Firebase) ───────────────────────────────────────────────
+  // ─── Cloud Sync: escuchar cambios remotos para refrescar la UI ───────────
 
   useEffect(() => {
-    // Conectar cloud sync si el usuario ya se autenticó con Google
-    if (googleAuth.isAuthenticated() || googleAuth.wasConnected()) {
-      cloudSync.connect().then(ok => {
-        if (ok) console.log('[CloudSync] Sincronización en la nube activa');
-      });
-    }
-
-    // Escuchar cambios remotos (otro dispositivo escribió en Firestore)
     const unsub = cloudSync.onRemoteChange(() => {
-      store.reloadFromStorage();
       refreshRef.current();
     });
-
-    return () => { unsub(); cloudSync.disconnect(); };
+    // También suscribirse a cambios del store (desde reloadFromStorage en Root)
+    const unsubStore = store.subscribe(() => {
+      refreshRef.current();
+    });
+    return () => { unsub(); unsubStore(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

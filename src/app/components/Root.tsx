@@ -1,5 +1,9 @@
+import { useEffect } from 'react';
 import { Outlet, Link, useLocation } from 'react-router';
 import { Home, Target, Calendar, BarChart3, Settings } from 'lucide-react';
+import { googleAuth } from '../lib/google-auth';
+import { cloudSync } from '../lib/cloud-sync';
+import { store } from '../lib/store';
 
 const NAV_ITEMS = [
   { to: '/',        icon: Home,     label: 'Inicio'   },
@@ -11,6 +15,20 @@ const NAV_ITEMS = [
 
 export function Root() {
   const location = useLocation();
+
+  // ─── Cloud Sync a nivel de App (persiste en TODAS las páginas) ──────
+  useEffect(() => {
+    if (googleAuth.isAuthenticated() || googleAuth.wasConnected()) {
+      cloudSync.connect();
+    }
+
+    // Cuando otro dispositivo escribe en Firestore, recargar datos
+    const unsub = cloudSync.onRemoteChange(() => {
+      store.reloadFromStorage();
+    });
+
+    return () => { unsub(); };
+  }, []);
 
   const isActive = (to: string) =>
     to === '/' ? location.pathname === '/' : location.pathname.startsWith(to);
