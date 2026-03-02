@@ -37,6 +37,8 @@ const DEBOUNCE_MS = 800;
 // ID único de esta instancia/pestaña para distinguir escrituras propias
 const DEVICE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+export type CloudSyncStatus = 'disconnected' | 'connecting' | 'retrying' | 'syncing' | 'connected';
+
 // ─── CloudSync ──────────────────────────────────────────────────────────────
 
 class CloudSync {
@@ -47,6 +49,8 @@ class CloudSync {
   private pendingUploads: Record<string, unknown> = {};
   private unsubscribers: Unsubscribe[] = [];
   private changeCallbacks: Array<() => void> = [];
+  private status: CloudSyncStatus = 'disconnected';
+  private statusCallbacks: Array<(status: CloudSyncStatus) => void> = [];
 
   private async waitForRestoredFirebaseSession(timeoutMs = 2500): Promise<boolean> {
     const startedAt = Date.now();
@@ -58,6 +62,26 @@ class CloudSync {
   }
 
   // ── Pub/Sub para cambios remotos ────────────────────────────────────────
+
+  onStatusChange(fn: (status: CloudSyncStatus) => void): () => void {
+    this.statusCallbacks.push(fn);
+    fn(this.status);
+    return () => {
+      this.statusCallbacks = this.statusCallbacks.filter(cb => cb !== fn);
+    };
+  }
+
+  getStatus(): CloudSyncStatus {
+    return this.status;
+  }
+
+  private setStatus(next: CloudSyncStatus): void {
+    if (this.status === next) return;
+    this.status = next;
+    this.statusCallbacks.forEach(fn => {
+      try { fn(next); } catch (e) { console.error('[CloudSync] status callback error:', e); }
+    });
+  }
 
   onRemoteChange(fn: () => void): () => void {
     this.changeCallbacks.push(fn);
@@ -78,6 +102,7 @@ class CloudSync {
     if (this.active) return true;
     if (this.connecting) return false;
     this.connecting = true;
+    this.setStatus('connecting');
 
     // Descartar uploads acumulados durante la inicialización del Store.
     // Esos datos vienen del localStorage local (posiblemente obsoleto).
@@ -102,6 +127,8 @@ class CloudSync {
         this.connecting = false;
         if (googleAuth.wasConnected()) {
           this.scheduleRetry(15_000);
+        } else {
+          this.setStatus('disconnected');
         }
         return false;
       }
@@ -121,6 +148,7 @@ class CloudSync {
 
       this.active = true;
       this.connecting = false;
+      this.setStatus('connected');
       console.log('[CloudSync] ✅ Conectado (device:', DEVICE_ID, ')');
       return true;
     } catch (e) {
@@ -133,6 +161,7 @@ class CloudSync {
 
   private scheduleRetry(delay: number): void {
     if (this.retryTimer) return;
+    this.setStatus('retrying');
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null;
       this.connect();
@@ -149,6 +178,8 @@ class CloudSync {
     // Guardar siempre para flush posterior
     this.pendingUploads[collection] = data;
 
+    if (this.active) this.setStatus('syncing');
+
     if (this.debounceTimers[collection]) {
       clearTimeout(this.debounceTimers[collection]);
     }
@@ -162,9 +193,12 @@ class CloudSync {
 
   private async doUpload(collection: string, data: unknown): Promise<void> {
     try {
+      if (this.active) this.setStatus('syncing');
       await saveUserData(collection, data, DEVICE_ID);
     } catch (e) {
       console.error(`[CloudSync] Error subiendo ${collection}:`, e);
+    } finally {
+      if (this.active) this.setStatus('connected');
     }
   }
 
@@ -172,9 +206,11 @@ class CloudSync {
   private async flushPending(): Promise<void> {
     const entries = Object.entries(this.pendingUploads);
     this.pendingUploads = {};
+    if (entries.length > 0 && this.active) this.setStatus('syncing');
     for (const [collection, data] of entries) {
       await this.doUpload(collection, data);
     }
+    if (entries.length > 0 && this.active) this.setStatus('connected');
   }
 
   // ── Sync inicial ───────────────────────────────────────────────────────
@@ -235,9 +271,11 @@ class CloudSync {
 
           if (data !== null && data !== undefined) {
             try {
+              if (this.active) this.setStatus('syncing');
               localStorage.setItem(storageKey, JSON.stringify(data));
               console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
               this.notifyRemoteChange();
+              if (this.active) this.setStatus('connected');
             } catch (e) {
               console.error(`[CloudSync] Error aplicando ${collection}:`, e);
             }
