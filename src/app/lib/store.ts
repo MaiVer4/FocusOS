@@ -1,5 +1,5 @@
 import { Block, BlockType, BlockPriority, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
-import { addMinutesToTime, durationBetween, todayStr } from './helpers';
+import { addMinutesToTime, dateToStr, durationBetween, todayStr } from './helpers';
 import { cloudSync } from './cloud-sync';
 
 const STORAGE_KEYS = {
@@ -738,14 +738,14 @@ class Store {
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   getTodayBlocks(): Block[] {
-    const today = new Date().toISOString().split('T')[0];
+    const today = todayStr();
     return this.getBlocks(today).sort((a, b) => a.startTime.localeCompare(b.startTime));
   }
 
   getCurrentBlock(): Block | null {
     const now = new Date();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const today = now.toISOString().split('T')[0];
+    const today = dateToStr(now);
     return this.getBlocks(today).find(b =>
       b.startTime <= currentTime && b.endTime > currentTime &&
       b.status !== 'completed' && b.status !== 'failed'
@@ -755,7 +755,7 @@ class Store {
   getNextBlock(): Block | null {
     const now = new Date();
     const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const today = now.toISOString().split('T')[0];
+    const today = dateToStr(now);
     const sorted = this.getBlocks(today).sort((a, b) => a.startTime.localeCompare(b.startTime));
     return sorted.find(b => b.startTime > currentTime && b.status === 'pending') ?? null;
   }
@@ -783,7 +783,7 @@ class Store {
    */
   cleanExpiredBlocks(): number {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = dateToStr(now);
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const grace = 30; // minutos de gracia después de endTime
 

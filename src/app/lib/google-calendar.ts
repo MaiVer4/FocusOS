@@ -4,6 +4,7 @@
  */
 
 import { googleAuth } from './google-auth';
+import { dateToStr } from './helpers';
 
 const BASE = 'https://www.googleapis.com/calendar/v3';
 
@@ -103,7 +104,7 @@ export async function getCalendarEvents(): Promise<CalendarEventItem[]> {
         // Timed event: start.dateTime = "2026-03-01T09:00:00-05:00"
         const startDt = new Date(ev.start.dateTime!);
         const endDt = new Date(ev.end.dateTime!);
-        date = startDt.toISOString().split('T')[0];
+        date = dateToStr(startDt);
         startTime = startDt.toTimeString().slice(0, 5); // HH:MM
         endTime = endDt.toTimeString().slice(0, 5);
       }

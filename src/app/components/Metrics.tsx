@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { DailyMetrics } from '../lib/types';
-import { scoreColor, scoreBarColor, formatDateDisplay, todayStr } from '../lib/helpers';
+import { dateToStr, scoreColor, scoreBarColor, formatDateDisplay, todayStr } from '../lib/helpers';
 import { TrendingUp, TrendingDown, Minus, Flame, Target, AlertTriangle } from 'lucide-react';
 
 export function Metrics() {
@@ -17,7 +17,7 @@ export function Metrics() {
     // Build metrics by recalculating from stored blocks for each day in the range
     const generated: DailyMetrics[] = [];
     for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().split('T')[0];
+      const dateStr = dateToStr(d);
       // Trigger recalculation so data is always fresh
       store.recalcDailyMetrics(dateStr);
       const m = store.getMetricsForDate(dateStr);

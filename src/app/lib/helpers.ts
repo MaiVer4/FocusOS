@@ -98,9 +98,17 @@ export function getCategoryColor(category: string): string {
 
 // ─── Time helpers ──────────────────────────────────────────────────────────────
 
-/** Returns today's date as YYYY-MM-DD */
+/** Converts any Date to YYYY-MM-DD using local timezone */
+export function dateToStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** Returns today's date as YYYY-MM-DD (local timezone) */
 export function todayStr(): string {
-  return new Date().toISOString().split('T')[0];
+  return dateToStr(new Date());
 }
 
 /** Convierte HH:mm (24h) a formato 12h sin AM/PM, ej: "13:00" → "1:00" */

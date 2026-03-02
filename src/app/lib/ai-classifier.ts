@@ -1,4 +1,4 @@
-import { todayStr } from './helpers';
+import { dateToStr, todayStr } from './helpers';
 
 export interface ParsedItem {
   subject: string;
@@ -107,7 +107,7 @@ function extractDate(text: string): { dueDate?: string; cleanText: string } {
     const year = spanishDate[4] ? parseInt(spanishDate[4]) : today.getFullYear();
     const d = new Date(year, month, day);
     if (d < today && !spanishDate[4]) d.setFullYear(d.getFullYear() + 1);
-    dueDate = d.toISOString().split('T')[0];
+    dueDate = dateToStr(d);
     // Remove the matched date from text
     cleanText = cleanText.replace(new RegExp(spanishDate[0].replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), '');
   }
@@ -119,7 +119,7 @@ function extractDate(text: string): { dueDate?: string; cleanText: string } {
         const d = new Date(today);
         const diff = (dow - d.getDay() + 7) % 7 || 7;
         d.setDate(d.getDate() + diff);
-        dueDate = d.toISOString().split('T')[0];
+        dueDate = dateToStr(d);
         cleanText = cleanText.replace(new RegExp(name, 'gi'), '');
         break;
       }
@@ -133,7 +133,7 @@ function extractDate(text: string): { dueDate?: string; cleanText: string } {
   } else if (!dueDate && lower.includes('mañana')) {
     const d = new Date(today);
     d.setDate(d.getDate() + 1);
-    dueDate = d.toISOString().split('T')[0];
+    dueDate = dateToStr(d);
     cleanText = cleanText.replace(/mañana/gi, '');
   }
 
