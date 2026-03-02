@@ -26,10 +26,10 @@ import {
   onAuthStateChanged,
   createUserWithEmailAndPassword,
   signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as firebaseSignOut,
   User,
 } from 'firebase/auth';
-import { googleAuth } from './google-auth';
 
 // ─── Firebase Config ─────────────────────────────────────────────────────────
 const firebaseConfig = {
@@ -110,13 +110,19 @@ export async function loginWithEmail(email: string, password: string): Promise<U
 }
 
 export async function loginWithGooglePopup(): Promise<User> {
-  // Usar Google Identity Services (GIS) ya configurado para evitar
-  // el error auth/unauthorized-domain de signInWithPopup.
-  const forceConsent = !googleAuth.wasConnected();
-  const accessToken = await googleAuth.authenticate(forceConsent);
-  const user = await signInWithGoogleToken(accessToken);
-  await ensureSingleOwner(user);
-  return user;
+  try {
+    const provider = new GoogleAuthProvider();
+    const result = await signInWithPopup(auth, provider);
+    currentUser = result.user;
+    await ensureSingleOwner(result.user);
+    return result.user;
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'auth/unauthorized-domain') {
+      throw new Error('Dominio no autorizado en Firebase. Agrega este dominio en Firebase Authentication > Settings > Authorized domains.');
+    }
+    throw err instanceof Error ? err : new Error('No se pudo iniciar sesión con Google.');
+  }
 }
 
 export function signOutFirebase(): Promise<void> {
