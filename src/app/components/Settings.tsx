@@ -11,6 +11,11 @@ export function Settings() {
 
   useEffect(() => {
     setNotificationsEnabled(notificationService.hasPermission());
+    // Refrescar settings cuando cloud sync actualiza desde otro dispositivo
+    const unsubStore = store.subscribe(() => {
+      setSettings(store.getSettings());
+    });
+    return () => unsubStore();
   }, []);
 
   const handleSave = (e: React.FormEvent) => {

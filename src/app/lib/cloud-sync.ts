@@ -158,35 +158,63 @@ class CloudSync {
 
   // ── Sync inicial ───────────────────────────────────────────────────────
 
+  /**
+   * Sync al conectar.
+   *
+   * Regla fundamental: la NUBE es la fuente de verdad.
+   * - Si nube tiene datos → usarlos directamente (respeta eliminaciones remotas).
+   * - Sólo se agregan al resultado los items locales que NO existen en nube
+   *   (= adiciones offline en este dispositivo).
+   * - Sólo se escribe de vuelta a Firestore si hubo adiciones locales nuevas,
+   *   para evitar race conditions que resucitan items eliminados.
+   */
   private async initialSync(): Promise<void> {
     for (const collection of COLLECTIONS) {
       const storageKey = STORAGE_KEYS[collection];
 
       try {
-        const cloudData = await loadUserData<unknown>(collection);
+        const cloudDoc = await loadUserData<{ value: unknown; updatedAt: number } | unknown>(collection);
+        // loadUserData devuelve el campo `value` directamente (ver firebase.ts)
+        const cloudData = cloudDoc as unknown;
         const localRaw = localStorage.getItem(storageKey);
         const localData = localRaw ? JSON.parse(localRaw) : null;
 
-        if (cloudData && !localData) {
+        if (!cloudData && !localData) {
+          // Nada que sincronizar
+        } else if (!cloudData && localData) {
+          // Primera vez: subir local a la nube
+          await saveUserData(collection, localData, DEVICE_ID);
+          console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
+        } else if (cloudData && !localData) {
+          // Dispositivo nuevo: cargar desde la nube
           localStorage.setItem(storageKey, JSON.stringify(cloudData));
           console.log(`[CloudSync] ${collection}: cargado de la nube`);
-        } else if (!cloudData && localData) {
-          await saveUserData(collection, localData, DEVICE_ID);
-          console.log(`[CloudSync] ${collection}: subido a la nube`);
-        } else if (cloudData && localData) {
+        } else {
+          // Ambos tienen datos — la NUBE gana
           if (collection === 'settings') {
-            const merged = { ...(localData as object), ...(cloudData as object) };
-            localStorage.setItem(storageKey, JSON.stringify(merged));
-            await saveUserData(collection, merged, DEVICE_ID);
+            // Settings: cloud reemplaza local completamente
+            localStorage.setItem(storageKey, JSON.stringify(cloudData));
+            console.log(`[CloudSync] settings: nube gana`);
           } else {
-            const merged = this.mergeArrays(
-              localData as Array<{ id: string }>,
-              cloudData as Array<{ id: string }>,
-            );
-            localStorage.setItem(storageKey, JSON.stringify(merged));
-            await saveUserData(collection, merged, DEVICE_ID);
+            // Arrays: nube es la base; solo agregar items locales que NO están en nube
+            // (adiciones hechas offline en este dispositivo)
+            const localArr = localData as Array<{ id: string }>;
+            const cloudArr = cloudData as Array<{ id: string }>;
+            const cloudIds = new Set(cloudArr.map(i => i.id));
+            const offlineAdditions = localArr.filter(i => !cloudIds.has(i.id));
+
+            if (offlineAdditions.length > 0) {
+              // Hay adiciones offline → merge y subir a nube
+              const merged = [...cloudArr, ...offlineAdditions];
+              localStorage.setItem(storageKey, JSON.stringify(merged));
+              await saveUserData(collection, merged, DEVICE_ID);
+              console.log(`[CloudSync] ${collection}: merge (${offlineAdditions.length} items offline agregados)`);
+            } else {
+              // Sin adiciones offline → usar nube directamente (respeta eliminaciones)
+              localStorage.setItem(storageKey, JSON.stringify(cloudData));
+              console.log(`[CloudSync] ${collection}: nube gana (${cloudArr.length} items)`);
+            }
           }
-          console.log(`[CloudSync] ${collection}: merge completo`);
         }
       } catch (e) {
         console.error(`[CloudSync] Error sync inicial ${collection}:`, e);
@@ -194,13 +222,6 @@ class CloudSync {
     }
 
     this.notifyRemoteChange();
-  }
-
-  private mergeArrays<T extends { id: string }>(local: T[], cloud: T[]): T[] {
-    const map = new Map<string, T>();
-    for (const item of local) map.set(item.id, item);
-    for (const item of cloud) map.set(item.id, item); // nube gana
-    return Array.from(map.values());
   }
 
   // ── Escucha en tiempo real ──────────────────────────────────────────────

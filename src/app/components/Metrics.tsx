@@ -10,33 +10,40 @@ export function Metrics() {
   const [currentStreak, setCurrentStreak] = useState(0);
 
   useEffect(() => {
-    const today = new Date();
-    const start = new Date();
-    start.setDate(today.getDate() - (period === 'week' ? 7 : 30));
+    const recalc = () => {
+      const today = new Date();
+      const start = new Date();
+      start.setDate(today.getDate() - (period === 'week' ? 7 : 30));
 
-    // Build metrics by recalculating from stored blocks for each day in the range
-    const generated: DailyMetrics[] = [];
-    for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
-      const dateStr = dateToStr(d);
-      // Trigger recalculation so data is always fresh
-      store.recalcDailyMetrics(dateStr);
-      const m = store.getMetricsForDate(dateStr);
-      if (m) generated.push(m);
-    }
-
-    setMetrics(generated);
-
-    // Calculate streak: consecutive days ending today with score >= 85
-    let streak = 0;
-    const sorted = [...generated].sort((a, b) => b.date.localeCompare(a.date));
-    for (const m of sorted) {
-      if (m.disciplineScore >= 85) {
-        streak++;
-      } else {
-        break;
+      // Build metrics by recalculating from stored blocks for each day in the range
+      const generated: DailyMetrics[] = [];
+      for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
+        const dateStr = dateToStr(d);
+        // Trigger recalculation so data is always fresh
+        store.recalcDailyMetrics(dateStr);
+        const m = store.getMetricsForDate(dateStr);
+        if (m) generated.push(m);
       }
-    }
-    setCurrentStreak(streak);
+
+      setMetrics(generated);
+
+      // Calculate streak: consecutive days ending today with score >= 85
+      let streak = 0;
+      const sorted = [...generated].sort((a, b) => b.date.localeCompare(a.date));
+      for (const m of sorted) {
+        if (m.disciplineScore >= 85) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+      setCurrentStreak(streak);
+    };
+
+    recalc();
+    // Refrescar cuando cloud sync actualiza datos desde otro dispositivo
+    const unsubStore = store.subscribe(recalc);
+    return () => unsubStore();
   }, [period]);
 
   const totalBlocks     = metrics.reduce((s, m) => s + m.blocksPlanned, 0);

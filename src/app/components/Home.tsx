@@ -30,12 +30,14 @@ export function Home() {
     };
 
     updateData();
+    // Refrescar cuando cloud sync actualiza datos desde otro dispositivo
+    const unsubStore = store.subscribe(updateData);
     const timer = setInterval(() => {
       setCurrentTime(new Date());
       updateData();
     }, 1000);
 
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); unsubStore(); };
   }, []);
 
   const completedBlocks = todayBlocks.filter(b => b.status === 'completed').length;

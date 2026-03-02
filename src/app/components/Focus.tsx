@@ -18,6 +18,15 @@ export function Focus() {
   const [blockFinished, setBlockFinished] = useState(false);
 
   useEffect(() => {
+    const loadBlock = () => {
+      setCurrentBlock(store.getCurrentBlock());
+    };
+    // Refrescar cuando cloud sync actualiza datos desde otro dispositivo
+    const unsubStore = store.subscribe(loadBlock);
+    return () => unsubStore();
+  }, []);
+
+  useEffect(() => {
     const block = store.getCurrentBlock();
     setCurrentBlock(block);
 
