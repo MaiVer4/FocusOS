@@ -778,7 +778,10 @@ class Store {
   }
 
   /**
-   * Elimina bloques de hoy que terminaron hace más de 30 minutos.
+    * Elimina bloques de hoy que terminaron hace más de 30 minutos.
+    *
+    * Importante: NO elimina bloques `pending` para evitar que la planificación
+    * desaparezca al recargar la app (caso común al generar rutina automática).
    * Devuelve la cantidad de bloques eliminados.
    */
   cleanExpiredBlocks(): number {
@@ -790,6 +793,10 @@ class Store {
     const before = this.blocks.length;
     this.blocks = this.blocks.filter(b => {
       if (b.date !== today) return true; // no tocar bloques de otros días
+
+      // Conservar siempre pendientes: son parte de la planificación del día.
+      if (b.status === 'pending') return true;
+
       const [eh, em] = b.endTime.split(':').map(Number);
       const endMinutes = eh * 60 + em;
       return currentMinutes < endMinutes + grace; // mantener si aún no han pasado 30 min
