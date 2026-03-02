@@ -24,6 +24,9 @@ import {
   signInWithCredential,
   GoogleAuthProvider,
   onAuthStateChanged,
+  createUserWithEmailAndPassword,
+  signInWithEmailAndPassword,
+  signInWithPopup,
   signOut as firebaseSignOut,
   User,
 } from 'firebase/auth';
@@ -44,6 +47,7 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
+const OWNER_DOC_PATH = ['app', 'singleton-owner'] as const;
 
 // ─── Auth con token de Google existente ──────────────────────────────────────
 
@@ -67,6 +71,49 @@ export async function signInWithGoogleToken(accessToken: string): Promise<User> 
   const credential = GoogleAuthProvider.credential(null, accessToken);
   const result = await signInWithCredential(auth, credential);
   currentUser = result.user; // Establecer inmediatamente, no esperar onAuthStateChanged
+  return result.user;
+}
+
+async function ensureSingleOwner(user: User): Promise<void> {
+  const ownerRef = doc(db, ...OWNER_DOC_PATH);
+  const snap = await getDoc(ownerRef);
+
+  if (!snap.exists()) {
+    await setDoc(ownerRef, {
+      ownerUid: user.uid,
+      ownerEmail: user.email ?? '',
+      createdAt: Date.now(),
+    });
+    return;
+  }
+
+  const data = snap.data() as { ownerUid?: string };
+  if (data.ownerUid && data.ownerUid !== user.uid) {
+    await firebaseSignOut(auth);
+    currentUser = null;
+    throw new Error('Esta app está vinculada a otro usuario.');
+  }
+}
+
+export async function registerWithEmail(email: string, password: string): Promise<User> {
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  currentUser = result.user;
+  await ensureSingleOwner(result.user);
+  return result.user;
+}
+
+export async function loginWithEmail(email: string, password: string): Promise<User> {
+  const result = await signInWithEmailAndPassword(auth, email, password);
+  currentUser = result.user;
+  await ensureSingleOwner(result.user);
+  return result.user;
+}
+
+export async function loginWithGooglePopup(): Promise<User> {
+  const provider = new GoogleAuthProvider();
+  const result = await signInWithPopup(auth, provider);
+  currentUser = result.user;
+  await ensureSingleOwner(result.user);
   return result.user;
 }
 

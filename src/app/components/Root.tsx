@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router';
 import { Home, Target, Calendar, BarChart3, Settings, Cloud, CloudOff, LoaderCircle, RotateCw } from 'lucide-react';
-import { googleAuth } from '../lib/google-auth';
 import { cloudSync, type CloudSyncStatus } from '../lib/cloud-sync';
+import { onFirebaseAuth } from '../lib/firebase';
 import { store } from '../lib/store';
 
 const NAV_ITEMS = [
@@ -27,9 +27,9 @@ export function Root() {
 
   // ─── Cloud Sync a nivel de App (persiste en TODAS las páginas) ──────
   useEffect(() => {
-    if (googleAuth.isAuthenticated() || googleAuth.wasConnected()) {
-      cloudSync.connect();
-    }
+    const unsubAuth = onFirebaseAuth((user) => {
+      if (user) cloudSync.connect();
+    });
 
     // Cuando otro dispositivo escribe en Firestore, recargar datos
     const unsub = cloudSync.onRemoteChange(() => {
@@ -40,7 +40,7 @@ export function Root() {
       setSyncStatus(status);
     });
 
-    return () => { unsub(); unsubStatus(); };
+    return () => { unsubAuth(); unsub(); unsubStatus(); };
   }, []);
 
   const isActive = (to: string) =>
