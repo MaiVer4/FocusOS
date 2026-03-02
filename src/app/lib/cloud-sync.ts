@@ -69,6 +69,13 @@ class CloudSync {
     if (this.connecting) return false;
     this.connecting = true;
 
+    // Descartar uploads acumulados durante la inicialización del Store.
+    // Esos datos vienen del localStorage local (posiblemente obsoleto).
+    // Después de initialSync el store se recargará con los datos correctos de la nube.
+    for (const timer of Object.values(this.debounceTimers)) clearTimeout(timer);
+    this.debounceTimers = {};
+    this.pendingUploads = {};
+
     try {
       let token = googleAuth.getAccessToken();
       if (!token && googleAuth.wasConnected()) {
@@ -173,48 +180,22 @@ class CloudSync {
       const storageKey = STORAGE_KEYS[collection];
 
       try {
-        const cloudDoc = await loadUserData<{ value: unknown; updatedAt: number } | unknown>(collection);
-        // loadUserData devuelve el campo `value` directamente (ver firebase.ts)
-        const cloudData = cloudDoc as unknown;
+        const cloudData = await loadUserData<unknown>(collection);
         const localRaw = localStorage.getItem(storageKey);
         const localData = localRaw ? JSON.parse(localRaw) : null;
 
-        if (!cloudData && !localData) {
+        if (cloudData === null && !localData) {
           // Nada que sincronizar
-        } else if (!cloudData && localData) {
-          // Primera vez: subir local a la nube
+        } else if (cloudData === null && localData) {
+          // Primera vez en este dispositivo: subir local a la nube
           await saveUserData(collection, localData, DEVICE_ID);
           console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
-        } else if (cloudData && !localData) {
-          // Dispositivo nuevo: cargar desde la nube
-          localStorage.setItem(storageKey, JSON.stringify(cloudData));
-          console.log(`[CloudSync] ${collection}: cargado de la nube`);
         } else {
-          // Ambos tienen datos — la NUBE gana
-          if (collection === 'settings') {
-            // Settings: cloud reemplaza local completamente
-            localStorage.setItem(storageKey, JSON.stringify(cloudData));
-            console.log(`[CloudSync] settings: nube gana`);
-          } else {
-            // Arrays: nube es la base; solo agregar items locales que NO están en nube
-            // (adiciones hechas offline en este dispositivo)
-            const localArr = localData as Array<{ id: string }>;
-            const cloudArr = cloudData as Array<{ id: string }>;
-            const cloudIds = new Set(cloudArr.map(i => i.id));
-            const offlineAdditions = localArr.filter(i => !cloudIds.has(i.id));
-
-            if (offlineAdditions.length > 0) {
-              // Hay adiciones offline → merge y subir a nube
-              const merged = [...cloudArr, ...offlineAdditions];
-              localStorage.setItem(storageKey, JSON.stringify(merged));
-              await saveUserData(collection, merged, DEVICE_ID);
-              console.log(`[CloudSync] ${collection}: merge (${offlineAdditions.length} items offline agregados)`);
-            } else {
-              // Sin adiciones offline → usar nube directamente (respeta eliminaciones)
-              localStorage.setItem(storageKey, JSON.stringify(cloudData));
-              console.log(`[CloudSync] ${collection}: nube gana (${cloudArr.length} items)`);
-            }
-          }
+          // La nube tiene datos → LA NUBE SIEMPRE GANA.
+          // Esto respeta eliminaciones, actualizaciones y cualquier cambio remoto.
+          // NO fusionar con datos locales: el local puede estar desactualizado.
+          localStorage.setItem(storageKey, JSON.stringify(cloudData));
+          console.log(`[CloudSync] ${collection}: nube aplicada (${Array.isArray(cloudData) ? (cloudData as unknown[]).length + ' items' : 'settings'})`);
         }
       } catch (e) {
         console.error(`[CloudSync] Error sync inicial ${collection}:`, e);
