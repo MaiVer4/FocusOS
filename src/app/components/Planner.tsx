@@ -85,12 +85,18 @@ export function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
-  // ─── Limpieza de bloques antiguos (>2 días) al montar ─────────────────────
+  // ─── Auto-limpieza: eliminar bloques cuya hora ya pasó hace más de 10 min ────
   useEffect(() => {
-    // Solo limpia bloques de más de 2 días de antigüedad ya terminados.
-    // Los bloques del día actual NUNCA se eliminan automáticamente.
+    // Limpiar inmediatamente al montar
     const cleaned = store.cleanExpiredBlocks();
     if (cleaned > 0) refreshData();
+
+    const interval = setInterval(() => {
+      const removed = store.cleanExpiredBlocks();
+      if (removed > 0) refreshData();
+    }, 60_000); // cada 60 segundos
+
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

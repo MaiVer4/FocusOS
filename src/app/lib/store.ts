@@ -778,32 +778,40 @@ class Store {
   }
 
   /**
-   * Limpia bloques de días ANTERIORES al día actual que ya están en estado terminal
-   * (completados o fallados) con más de 2 días de antigüedad, para evitar acumulación.
+   * Elimina bloques del día actual cuya hora de finalización ya pasó hace más de 10 minutos.
+   * También limpia bloques de más de 2 días de antigüedad en estado terminal.
    *
-   * Los bloques del DÍA ACTUAL nunca se eliminan automáticamente —
-   * el usuario debe verlos todo el día sin importar su estado o si su hora ya pasó.
+   * Importante: NO elimina bloques `pending` futuros — solo los que su endTime ya
+   * quedó en el pasado (bloque que no se inició / ya terminó su ventana horaria).
    *
    * Devuelve la cantidad de bloques eliminados.
    */
   cleanExpiredBlocks(): number {
     const now = new Date();
     const today = dateToStr(now);
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const grace = 10; // minutos de gracia después de endTime
 
-    // Calcular el límite: días anteriores a antes de ayer
     const twoDaysAgo = new Date(now);
     twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
     const twoDaysAgoStr = dateToStr(twoDaysAgo);
 
     const before = this.blocks.length;
     this.blocks = this.blocks.filter(b => {
-      // Nunca tocar los bloques de hoy
-      if (b.date >= today) return true;
+      // Bloques futuros (otro día posterior a hoy): conservar siempre
+      if (b.date > today) return true;
 
-      // Conservar bloques recientes (ayer) sin importar su estado
+      // Bloques del día de hoy: eliminar si su hora de fin ya pasó hace más de 10 min
+      if (b.date === today) {
+        const [eh, em] = b.endTime.split(':').map(Number);
+        const endMinutes = eh * 60 + em;
+        return currentMinutes < endMinutes + grace;
+      }
+
+      // Bloques de días anteriores: conservar si son recientes (ayer)
       if (b.date > twoDaysAgoStr) return true;
 
-      // Bloques de más de 2 días: solo eliminar los ya terminados
+      // Más de 2 días: solo eliminar los ya terminados
       return b.status === 'pending' || b.status === 'active';
     });
     const removed = before - this.blocks.length;
