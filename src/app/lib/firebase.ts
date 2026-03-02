@@ -167,6 +167,23 @@ export async function loadUserData<T>(
   return snap.data().value as T;
 }
 
+/** Carga datos + metadata (updatedAt) desde Firestore */
+export async function loadUserDataWithMeta<T>(
+  collection: string,
+): Promise<{ exists: boolean; value: T | null; updatedAt: number }> {
+  const user = getActiveUser();
+  if (!user) return { exists: false, value: null, updatedAt: 0 };
+  const ref = doc(db, 'users', user.uid, 'data', collection);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return { exists: false, value: null, updatedAt: 0 };
+  const data = snap.data();
+  return {
+    exists: true,
+    value: (data.value as T) ?? null,
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0,
+  };
+}
+
 /**
  * Escucha cambios en tiempo real en Firestore.
  * Cuando otro dispositivo escribe, se ejecuta el callback.

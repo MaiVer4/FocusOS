@@ -12,7 +12,7 @@
 import {
   signInWithGoogleToken,
   saveUserData,
-  loadUserData,
+  loadUserDataWithMeta,
   onUserDataChange,
   getFirebaseUser,
   auth,
@@ -31,6 +31,7 @@ const STORAGE_KEYS: Record<Collection, string> = {
   metrics: 'focusos_metrics',
   settings: 'focusos_settings',
 };
+const META_KEY = 'focusos_sync_meta';
 
 const DEBOUNCE_MS = 800;
 
@@ -51,6 +52,35 @@ class CloudSync {
   private changeCallbacks: Array<() => void> = [];
   private status: CloudSyncStatus = 'disconnected';
   private statusCallbacks: Array<(status: CloudSyncStatus) => void> = [];
+
+  private loadMeta(): Partial<Record<Collection, number>> {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (!raw) return {};
+      return JSON.parse(raw) as Partial<Record<Collection, number>>;
+    } catch {
+      return {};
+    }
+  }
+
+  private saveMeta(meta: Partial<Record<Collection, number>>): void {
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(meta));
+    } catch {
+      // ignore
+    }
+  }
+
+  private getLocalUpdatedAt(collection: Collection): number {
+    const meta = this.loadMeta();
+    return meta[collection] ?? 0;
+  }
+
+  private setLocalUpdatedAt(collection: Collection, ts: number): void {
+    const meta = this.loadMeta();
+    meta[collection] = ts;
+    this.saveMeta(meta);
+  }
 
   private async waitForRestoredFirebaseSession(timeoutMs = 2500): Promise<boolean> {
     const startedAt = Date.now();
@@ -189,6 +219,9 @@ class CloudSync {
   uploadDebounced(collection: string, data: unknown): void {
     // Guardar siempre para flush posterior
     this.pendingUploads[collection] = data;
+    if ((COLLECTIONS as readonly string[]).includes(collection)) {
+      this.setLocalUpdatedAt(collection as Collection, Date.now());
+    }
 
     if (this.active) this.setStatus('syncing');
 
@@ -242,22 +275,34 @@ class CloudSync {
       const storageKey = STORAGE_KEYS[collection];
 
       try {
-        const cloudData = await loadUserData<unknown>(collection);
+        const cloud = await loadUserDataWithMeta<unknown>(collection);
+        const cloudData = cloud.value;
+        const cloudUpdatedAt = cloud.updatedAt;
         const localRaw = localStorage.getItem(storageKey);
         const localData = localRaw ? JSON.parse(localRaw) : null;
+        const localUpdatedAt = this.getLocalUpdatedAt(collection);
 
-        if (cloudData === null && !localData) {
+        if (!cloud.exists && !localData) {
           // Nada que sincronizar
-        } else if (cloudData === null && localData) {
+        } else if (!cloud.exists && localData) {
           // Primera vez en este dispositivo: subir local a la nube
           await saveUserData(collection, localData, DEVICE_ID);
+          this.setLocalUpdatedAt(collection, Date.now());
           console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
-        } else {
-          // La nube tiene datos → LA NUBE SIEMPRE GANA.
-          // Esto respeta eliminaciones, actualizaciones y cualquier cambio remoto.
-          // NO fusionar con datos locales: el local puede estar desactualizado.
+        } else if (cloud.exists && !localData) {
           localStorage.setItem(storageKey, JSON.stringify(cloudData));
-          console.log(`[CloudSync] ${collection}: nube aplicada (${Array.isArray(cloudData) ? (cloudData as unknown[]).length + ' items' : 'settings'})`);
+          this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
+          console.log(`[CloudSync] ${collection}: cargado de la nube (${cloudUpdatedAt})`);
+        } else {
+          // Ambos lados tienen datos: elegir el más reciente.
+          if (localUpdatedAt > cloudUpdatedAt) {
+            await saveUserData(collection, localData, DEVICE_ID);
+            console.log(`[CloudSync] ${collection}: local más reciente (${localUpdatedAt} > ${cloudUpdatedAt})`);
+          } else {
+            localStorage.setItem(storageKey, JSON.stringify(cloudData));
+            this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
+            console.log(`[CloudSync] ${collection}: nube más reciente (${cloudUpdatedAt} >= ${localUpdatedAt})`);
+          }
         }
       } catch (e) {
         console.error(`[CloudSync] Error sync inicial ${collection}:`, e);
@@ -277,7 +322,7 @@ class CloudSync {
 
       const unsub = onUserDataChange(
         collection,
-        (data: unknown, _updatedAt: number, writerDeviceId?: string) => {
+        (data: unknown, updatedAt: number, writerDeviceId?: string) => {
           // Ignorar escrituras propias
           if (writerDeviceId === DEVICE_ID) return;
 
@@ -285,6 +330,7 @@ class CloudSync {
             try {
               if (this.active) this.setStatus('syncing');
               localStorage.setItem(storageKey, JSON.stringify(data));
+              this.setLocalUpdatedAt(collection, updatedAt || Date.now());
               console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
               this.notifyRemoteChange();
               if (this.active) this.setStatus('connected');
