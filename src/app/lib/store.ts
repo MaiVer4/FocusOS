@@ -953,46 +953,68 @@ class Store {
    *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
    *  4. Los rest/low que no caben se eliminan.
    */
-  reorganizeBlocks(date: string): void {
+  reorganizeBlocks(date: string, anchorId?: string): void {
     const dayBlocks = this.getBlocks(date);
     if (dayBlocks.length <= 1) return;
 
-    // Separar bloques fijos (ya activos/completados) de los pendientes
-    const fixed = dayBlocks.filter(b => b.status === 'completed' || b.status === 'active');
-    const pending = dayBlocks.filter(b => b.status !== 'completed' && b.status !== 'active');
+    // Labels que no se mueven (bloques de horario fijo)
+    const fixedLabels = ['sena', 'actividades formales', 'transporte de regreso'];
+    const isFixed = (b: Block) =>
+      b.status === 'completed' || b.status === 'active'
+      || fixedLabels.some(l => (b.label ?? '').toLowerCase().includes(l))
+      || b.id === anchorId;
 
-    // Ordenar pendientes cronológicamente (mantener el orden del usuario)
-    pending.sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const fixed = dayBlocks.filter(isFixed);
+    const movable = dayBlocks.filter(b => !isFixed(b));
 
-    // Crear "ocupación" con bloques fijos
+    // Ordenar movibles por startTime
+    movable.sort((a, b) => a.startTime.localeCompare(b.startTime));
+
+    // Crear slots ocupados por bloques fijos
     const occupied: Array<{ start: string; end: string }> = fixed.map(b => ({ start: b.startTime, end: b.endTime }));
     occupied.sort((a, b) => a.start.localeCompare(b.start));
 
-    // Colocar cada bloque pendiente en orden cronológico
-    // Solo se desplaza si se solapa con un bloque ya colocado (cascada hacia adelante)
     const placed: Block[] = [...fixed];
     const idsToRemove = new Set<string>();
 
-    for (const block of pending) {
+    for (const block of movable) {
       let candidate = block.startTime;
 
-      // Buscar la primera posición libre a partir de la posición actual del bloque
-      for (const occ of occupied) {
-        const candidateEnd = addMinutesToTime(candidate, block.duration);
-        // Si hay solapamiento, mover después del slot ocupado + 5 min de gap
-        if (candidate < occ.end && candidateEnd > occ.start) {
-          candidate = addMinutesToTime(occ.end, 5);
+      // Si hay brecha con el bloque anterior, pegar al final del anterior
+      const allPlaced = [...occupied].sort((a, b) => a.start.localeCompare(b.start));
+      // Encontrar el slot que termina justo antes o en el candidate
+      let prevEnd: string | null = null;
+      for (const occ of allPlaced) {
+        if (occ.end <= candidate) prevEnd = occ.end;
+      }
+      // Cerrar brecha: si hay un hueco entre el bloque anterior y este, pegarlo
+      if (prevEnd && prevEnd < candidate) {
+        // Verificar que no haya un bloque fijo en medio
+        const gapOccupied = allPlaced.some(occ => occ.start >= prevEnd! && occ.start < candidate);
+        if (!gapOccupied) {
+          candidate = prevEnd;
+        }
+      }
+
+      // Resolver solapamientos con bloques fijos (saltar después)
+      let changed = true;
+      while (changed) {
+        changed = false;
+        for (const occ of occupied) {
+          const candidateEnd = addMinutesToTime(candidate, block.duration);
+          if (candidate < occ.end && candidateEnd > occ.start) {
+            candidate = occ.end; // pegar justo al final del fijo, sin gap
+            changed = true;
+          }
         }
       }
 
       const newEnd = addMinutesToTime(candidate, block.duration);
       if (newEnd > '23:59') {
-        // No cabe → eliminarlo si es rest de baja prioridad
         if (block.type === 'rest' && block.priority === 'low') {
           idsToRemove.add(block.id);
           continue;
         }
-        // Si no es rest, dejarlo donde estaba (no se puede mover más)
         occupied.push({ start: block.startTime, end: block.endTime });
         occupied.sort((a, b) => a.start.localeCompare(b.start));
         placed.push(block);
@@ -1006,16 +1028,14 @@ class Store {
       placed.push(block);
     }
 
-    // Aplicar cambios al store
+    // Aplicar cambios
     const placedIds = new Set(placed.map(b => b.id));
     this.blocks = this.blocks.filter(b => b.date !== date || placedIds.has(b.id));
-    // Actualizar horarios de los bloques reposicionados
     for (const p of placed) {
       this.blocks = this.blocks.map(b =>
         b.id === p.id ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration } : b
       );
     }
-    // Eliminar rest blocks que no caben
     this.blocks = this.blocks.filter(b => !idsToRemove.has(b.id));
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
   }
@@ -1059,7 +1079,15 @@ class Store {
   updateBlock(id: string, updates: Partial<Block>): void {
     this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates } : b);
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-    this.recalcDailyMetrics(this.blocks.find(b => b.id === id)?.date ?? '');
+
+    const block = this.blocks.find(b => b.id === id);
+    if (block) {
+      this.recalcDailyMetrics(block.date);
+      // Reorganizar si se editaron horarios
+      if (updates.startTime !== undefined || updates.endTime !== undefined || updates.duration !== undefined) {
+        this.reorganizeBlocks(block.date, id);
+      }
+    }
 
     // Refrescar perfil cuando un bloque se completa o falla
     if (updates.status === 'completed' || updates.status === 'failed') {
@@ -1071,7 +1099,10 @@ class Store {
     const block = this.blocks.find(b => b.id === id);
     this.blocks = this.blocks.filter(b => b.id !== id);
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-    if (block?.date) this.recalcDailyMetrics(block.date);
+    if (block?.date) {
+      this.recalcDailyMetrics(block.date);
+      this.reorganizeBlocks(block.date);
+    }
   }
 
   deleteAllBlocksForDate(date: string): void {

@@ -439,11 +439,6 @@ export function Planner() {
       return;
     }
 
-    if (store.hasBlockOverlap(editingBlock.date, startTime, endTime, editingBlock.id)) {
-      alert('El horario se solapa con otro bloque existente. Ajusta las horas.');
-      return;
-    }
-
     const taskId = fd.get('taskId') as string || undefined;
     const task = taskId ? tasks.find(t => t.id === taskId) : undefined;
     const status = (fd.get('status') as Block['status']) ?? editingBlock.status;
