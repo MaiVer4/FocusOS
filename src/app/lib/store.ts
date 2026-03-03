@@ -633,9 +633,11 @@ class Store {
     const dayTasks = this.getTasksForDayWithCarryOver(date)
       .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
 
-    // Bloques libres (sin tarea, pendientes, solo deep/light — no rest ni exercise)
+    // Bloques libres (sin tarea, pendientes, solo deep/light de estudio — no rest, exercise, ni rutinas)
+    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
     const freeBlocks = dayBlocks.filter(
       b => !b.taskId && b.status === 'pending' && b.type !== 'rest' && b.type !== 'exercise'
+        && !routineLabels.some(r => (b.label ?? '').toLowerCase().includes(r))
     );
 
     if (dayTasks.length === 0 || freeBlocks.length === 0) return;
@@ -1004,8 +1006,10 @@ class Store {
   addBlock(block: Block): void {
     this.blocks = [...this.blocks, block];
 
-    // Auto-asignar tarea solo a bloques de estudio (deep/light)
-    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId) {
+    // Auto-asignar tarea solo a bloques de estudio (deep/light) que no sean rutinas
+    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
+    const isRoutineBlock = routineLabels.some(r => (block.label ?? '').toLowerCase().includes(r));
+    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineBlock) {
       const dayBlocks = this.blocks.filter(b => b.date === block.date);
       const tasksWithBlocks = new Set(
         dayBlocks.filter(b => b.taskId).map(b => b.taskId!)

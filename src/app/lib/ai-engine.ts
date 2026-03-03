@@ -276,21 +276,22 @@ ${isWeekend
   : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario tiene actividades formales
 - ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
 - ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, estudio ligero
-- ✅ Bloque FORMAL: colocar UN SOLO bloque (type:"light", label:"Actividades formales") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}
+- ✅ Bloque FORMAL: colocar UN SOLO bloque (type:"rest", label:"Actividades formales") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}. SIN taskId.
 - ✅ Ventana TARDE/NOCHE: ${settings.arrivalTime} a ${settings.sleepTime} → cena, bloques profundos, ejercicio, descanso`
 }
 
 REGLAS GENERALES:
 1. Cada bloque: type (deep|light|exercise|rest), label, startTime (HH:mm), endTime (HH:mm), priority (high|medium|low)
-2. Todo bloque deep/light DEBE tener taskId de las tareas pendientes (exercise y rest NO llevan taskId)
+2. Solo bloques de ESTUDIO (deep/light cuyo propósito es estudiar una tarea académica) llevan taskId. Bloques exercise, rest, y rutinas diarias NUNCA llevan taskId
 3. Tareas urgentes/difíciles en franjas de mayor productividad (pico de energía: ${settings.peakEnergyTime})
 4. Descansos de 5-15 min entre bloques de estudio
 5. Incluir ejercicio si es obligatorio (${settings.exerciseMandatory ? 'SÍ es obligatorio' : 'no es obligatorio'})
 6. Sin solapamientos entre bloques
-7. Incluir comidas: desayuno, almuerzo/cena según horario
+7. Comidas (Desayuno, Almuerzo, Cena) → SIEMPRE tipo "rest", SIN taskId
 8. Tareas difíciles/urgentes en franjas con mejor tasa de éxito del perfil
 9. Duraciones de bloques deep cercanas a ${settings.deepBlockDuration} min
 10. Generar entre ${settings.dailyDeepBlocksMin} y ${settings.dailyDeepBlocksMax} bloques profundos
+11. Redes sociales, preparación para dormir, transporte, y cualquier rutina no-académica → SIEMPRE tipo "rest", SIN taskId. Solo deep/light de estudio llevan taskId
 
 Responde SOLO con JSON válido (sin markdown, sin backticks):
 {
@@ -355,6 +356,20 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
     const taskIds = new Set(tasks.map(t => t.id));
     for (const b of parsed.blocks)
       if (b.taskId && !taskIds.has(b.taskId)) b.taskId = undefined;
+
+    // Strip taskId de bloques que no son de estudio (rest/exercise nunca llevan tarea)
+    const routineKeywords = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
+    for (const b of parsed.blocks) {
+      if (b.type === 'rest' || b.type === 'exercise') {
+        b.taskId = undefined;
+      }
+      // Forzar tipo rest para bloques con labels de rutina (la IA a veces usa tipo incorrecto)
+      const labelLower = (b.label ?? '').toLowerCase();
+      if (routineKeywords.some(k => labelLower.includes(k))) {
+        b.type = 'rest';
+        b.taskId = undefined;
+      }
+    }
 
     parsed.confidence = typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5;
     parsed.insights = Array.isArray(parsed.insights) ? parsed.insights : [];
