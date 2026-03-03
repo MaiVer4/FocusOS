@@ -38,6 +38,9 @@ export interface AIDailySummary {
 
 // ─── Gemini Client ───────────────────────────────────────────────────────────
 
+// Modelos en orden de preferencia (si uno falla por cuota, probar el siguiente)
+const AI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
+
 let genAI: GoogleGenerativeAI | null = null;
 
 function getClient(apiKey: string): GoogleGenerativeAI {
@@ -50,6 +53,32 @@ function getClient(apiKey: string): GoogleGenerativeAI {
 /** Resetea el cliente (cuando cambia la API key) */
 export function resetAIClient(): void {
   genAI = null;
+}
+
+/**
+ * Intenta generar contenido probando varios modelos.
+ * Si uno falla por cuota (429), prueba el siguiente.
+ */
+async function generateWithFallback(client: GoogleGenerativeAI, prompt: string): Promise<string> {
+  let lastError: any = null;
+  for (const modelName of AI_MODELS) {
+    try {
+      const model = client.getGenerativeModel({ model: modelName });
+      const result = await model.generateContent(prompt);
+      return result.response.text();
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message ?? '';
+      // Si es error de cuota, probar siguiente modelo
+      if (msg.includes('429') || msg.includes('quota') || msg.includes('rate')) {
+        console.warn(`[AI Engine] Modelo ${modelName} sin cuota, probando siguiente...`);
+        continue;
+      }
+      // Si es otro error (key inválida, etc.) no seguir probando
+      throw err;
+    }
+  }
+  throw lastError ?? new Error('Todos los modelos agotaron su cuota. Intenta más tarde.');
 }
 
 // ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -161,7 +190,6 @@ export async function generateAISchedule(
   const dayName = dayNames[dayOfWeek];
 
   const client = getClient(apiKey);
-  const model = client.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `Eres un asistente experto en productividad y gestión del tiempo. Tu trabajo es generar un horario diario optimizado para un estudiante.
 
@@ -205,8 +233,8 @@ Responde SOLO con un JSON válido con esta estructura exacta (sin markdown, sin 
 }`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const raw = await generateWithFallback(client, prompt);
+    const text = raw.trim();
 
     // Limpiar posibles wrappers de markdown
     const cleaned = text
@@ -264,7 +292,6 @@ export async function getAIDailySummary(
   metrics: DailyMetrics[],
 ): Promise<AIDailySummary> {
   const client = getClient(apiKey);
-  const model = client.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const completed = blocks.filter(b => b.status === 'completed');
   const failed = blocks.filter(b => b.status === 'failed');
@@ -296,8 +323,8 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 }`;
 
   try {
-    const result = await model.generateContent(prompt);
-    const text = result.response.text().trim();
+    const raw = await generateWithFallback(client, prompt);
+    const text = raw.trim();
     const cleaned = text
       .replace(/^```json\s*/i, '')
       .replace(/^```\s*/i, '')
@@ -321,12 +348,15 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 export async function validateApiKey(apiKey: string): Promise<boolean> {
   try {
     const client = new GoogleGenerativeAI(apiKey);
-    const model = client.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    const result = await model.generateContent('Di hola');
-    const text = result.response.text();
-    // Si obtuvimos cualquier respuesta, la key es válida
+    const text = await generateWithFallback(client, 'Di hola');
     return text.length > 0;
-  } catch (err) {
+  } catch (err: any) {
+    const msg = err?.message ?? '';
+    // Error 429 = la key ES válida, solo agotó cuota temporalmente
+    if (msg.includes('429') || msg.includes('quota') || msg.includes('rate')) {
+      console.warn('[AI Engine] Key válida pero cuota agotada en todos los modelos');
+      return true; // Key válida, cuota temporal
+    }
     console.error('[AI Engine] Error validando API key:', err);
     return false;
   }
