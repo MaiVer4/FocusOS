@@ -21,9 +21,9 @@ const DEFAULT_SETTINGS: UserSettings = {
   appName: 'FocusOS',
   wakeTime: '07:00',
   sleepTime: '23:00',
-  scheduleStartTime: '08:00',
+  scheduleStartTime: '12:00',
   scheduleEndTime: '18:00',
-  arrivalTime: '18:30',
+  arrivalTime: '18:45',
   peakEnergyTime: 'morning',
   dailyDeepBlocksMin: 1,
   dailyDeepBlocksMax: 3,
@@ -86,41 +86,61 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
   c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
   c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
 
-  // Ventana extra antes de formales para estudio/preparación
+  // Ventana antes de formales: estudio y preparación
   const timeBeforeFormal = formalStart - c;
+  const prepAndTransport = 30; // reservar mín. para vestirse (15) + transporte (15)
+  const morningStudyWindow = timeBeforeFormal - prepAndTransport;
+  let morningDeepCount = 0;
 
-  if (timeBeforeFormal >= 90) {
-    // Hay ≥90 min libres → estudio ligero + prepararse + transporte
-    const studyTime = Math.min(60, timeBeforeFormal - 30);
-    c = _push(blocks, c, studyTime, 'light', 'Estudio ligero', 'medium', true);
-    const prepTime = Math.min(15, formalStart - c);
-    if (prepTime >= 10) {
-      c = _push(blocks, c, prepTime, 'rest', 'Vestirse y prepararse', 'low');
+  if (morningStudyWindow >= deepDur + 10) {
+    // ═══ Ventana grande: bloques profundos de mañana ═══
+    while (morningDeepCount < deepMax) {
+      const remaining = formalStart - c - prepAndTransport;
+      if (remaining < deepDur) break;
+      c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${morningDeepCount + 1}`, 'high', true);
+      morningDeepCount++;
+      // Break entre bloques (si cabe otro deep después)
+      const afterBreak = formalStart - c - 10 - prepAndTransport;
+      if (afterBreak >= deepDur) {
+        c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
+      } else {
+        // No cabe otro deep; agregar descanso solo si queda para estudio ligero
+        if (formalStart - c - prepAndTransport >= 35) {
+          c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
+        }
+        break;
+      }
     }
-    const transportTime = formalStart - c;
-    if (transportTime >= 10) {
-      c = _push(blocks, c, transportTime, 'rest', 'Transporte', 'low');
+    // Tiempo extra entre último bloque y preparación → estudio ligero
+    const extraTime = formalStart - c - prepAndTransport;
+    if (extraTime >= 25) {
+      c = _push(blocks, c, Math.min(extraTime, 60), 'light', 'Estudio ligero', 'medium', true);
     }
-  } else if (timeBeforeFormal >= 45) {
-    // Hay 45-89 min → prepararse + transporte
+  } else if (morningStudyWindow >= 30) {
+    // ═══ Ventana media: estudio ligero ═══
+    c = _push(blocks, c, Math.min(60, morningStudyWindow), 'light', 'Estudio ligero', 'medium', true);
+  } else if (timeBeforeFormal >= 15) {
+    // Ventana pequeña: solo prepararse
+  }
+
+  // Prepararse y transporte antes de formales
+  const remainBeforeFormal = formalStart - c;
+  if (remainBeforeFormal >= 25) {
     c = _push(blocks, c, 15, 'rest', 'Vestirse y prepararse', 'low');
     const transportTime = formalStart - c;
     if (transportTime >= 10) {
       c = _push(blocks, c, transportTime, 'rest', 'Transporte', 'low');
     }
-  } else if (timeBeforeFormal >= 15) {
-    // Hay 15-44 min → solo prepararse
-    c = _push(blocks, c, Math.min(timeBeforeFormal, 20), 'rest', 'Prepararse', 'low');
+  } else if (remainBeforeFormal >= 10) {
+    c = _push(blocks, c, remainBeforeFormal, 'rest', 'Prepararse', 'low');
   }
-  // Si timeBeforeFormal < 15 (o negativo): el cursor ya está en/pasó la hora formal
-  // Las formales empezarán donde el cursor quedó
 
   // ═══ FORMAL: scheduleStartTime → scheduleEndTime ═══
   // Usar max(cursor, formalStart) para evitar solapamiento con la rutina matutina
   const actualFormalStart = Math.max(c, formalStart);
   if (formalEnd > actualFormalStart) {
     blocks.push({
-      type: 'light', label: 'Actividades formales',
+      type: 'rest', label: 'Actividades formales',
       startTime: _toTime(actualFormalStart), endTime: s.scheduleEndTime,
       priority: 'high',
     });
@@ -144,15 +164,17 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     c = _push(blocks, c, dinnerDur, 'rest', 'Llegada y cena', 'low');
   }
 
-  // Bloques profundos con descansos
+  // Bloques profundos con descansos (descontando los colocados en la mañana)
   const breakDur = 10;
-  for (let i = 0; i < deepMax; i++) {
+  const afternoonDeepMax = deepMax - morningDeepCount;
+  for (let i = 0; i < afternoonDeepMax; i++) {
     if (c + deepDur > sleep - 30) break; // reservar 30 min para cierre del día
-    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${i + 1}`, 'high', true);
+    const blockNum = morningDeepCount + i + 1;
+    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${blockNum}`, 'high', true);
 
     // Descanso entre bloques (no después del último)
-    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
-      c = _push(blocks, c, breakDur, 'rest', i < deepMax - 2 ? 'Descanso' : 'Descanso corto', 'low');
+    if (i < afternoonDeepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
+      c = _push(blocks, c, breakDur, 'rest', 'Descanso', 'low');
     }
   }
 
