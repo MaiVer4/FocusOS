@@ -322,9 +322,12 @@ export async function validateApiKey(apiKey: string): Promise<boolean> {
   try {
     const client = new GoogleGenerativeAI(apiKey);
     const model = client.getGenerativeModel({ model: 'gemini-2.0-flash' });
-    const result = await model.generateContent('Responde solo "ok"');
-    return result.response.text().toLowerCase().includes('ok');
-  } catch {
+    const result = await model.generateContent('Di hola');
+    const text = result.response.text();
+    // Si obtuvimos cualquier respuesta, la key es válida
+    return text.length > 0;
+  } catch (err) {
+    console.error('[AI Engine] Error validando API key:', err);
     return false;
   }
 }

@@ -301,8 +301,17 @@ export function Settings() {
               onClick={async () => {
                 setValidatingKey(true);
                 setKeyStatus('idle');
-                const valid = await validateApiKey(settings.geminiApiKey!);
-                setKeyStatus(valid ? 'valid' : 'invalid');
+                try {
+                  const valid = await validateApiKey(settings.geminiApiKey!);
+                  setKeyStatus(valid ? 'valid' : 'invalid');
+                  if (valid) {
+                    // Guardar automáticamente al validar con éxito
+                    store.updateSettings(settings);
+                  }
+                } catch (err) {
+                  console.error('Error validando:', err);
+                  setKeyStatus('invalid');
+                }
                 setValidatingKey(false);
               }}
               className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
