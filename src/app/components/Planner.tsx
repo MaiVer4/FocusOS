@@ -18,7 +18,7 @@ import {
   todayStr,
   formatDateDisplay,
 } from '../lib/helpers';
-import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap, CalendarDays } from 'lucide-react';
+import { Plus, Trash2, CalendarIcon, BookOpen, Clock, Pencil, Sparkles, Loader2, Package, ChevronDown, FolderOpen, ListChecks, Check, GraduationCap, CalendarDays, Brain } from 'lucide-react';
 import { googleAuth } from '../lib/google-auth';
 import { getClassroomPendingTasks, ClassroomTask } from '../lib/google-classroom';
 import { getCalendarEvents, CalendarEventItem } from '../lib/google-calendar';
@@ -52,6 +52,8 @@ export function Planner() {
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiInsights, setAiInsights] = useState<string[] | null>(null);
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -175,6 +177,25 @@ export function Planner() {
 
     refreshData();
     setShowDailySetup(false);
+  };
+
+  // ─── AI Generate ──────────────────────────────────────────────────────────────
+
+  const handleAIGenerate = async () => {
+    if (aiGenerating) return;
+    setAiGenerating(true);
+    setAiInsights(null);
+    try {
+      const result = await store.generateWithAI(selectedDate);
+      if (result.insights.length > 0) {
+        setAiInsights(result.insights);
+      }
+      refreshData();
+    } catch (err: any) {
+      alert(err.message ?? 'Error al generar con IA');
+    } finally {
+      setAiGenerating(false);
+    }
   };
 
   // ─── Add Task ────────────────────────────────────────────────────────────────
@@ -757,6 +778,17 @@ export function Planner() {
               >
                 Auto
               </button>
+              {store.isAIEnabled() && (
+                <button
+                  onClick={handleAIGenerate}
+                  disabled={aiGenerating || blocks.length > 0}
+                  className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                  title={blocks.length > 0 ? 'Elimina los bloques primero' : 'Generar horario con IA'}
+                >
+                  {aiGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
+                  IA
+                </button>
+              )}
               <button
                 onClick={() => setShowAddBlock(true)}
                 className="p-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
@@ -770,10 +802,24 @@ export function Planner() {
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center text-zinc-500 space-y-2">
               <CalendarIcon className="size-8 mx-auto opacity-40" />
               <p className="text-sm">Sin bloques para este día</p>
-              <p className="text-xs">Toca "Auto" para configuración rápida o "+" para agregar manualmente</p>
+              <p className="text-xs">Toca "Auto" para configuración rápida{store.isAIEnabled() ? ', "IA" para horario inteligente' : ''} o "+" para agregar manualmente</p>
             </div>
           ) : (
             <div className="space-y-2">
+              {/* AI Insights */}
+              {aiInsights && aiInsights.length > 0 && (
+                <div className="bg-purple-900/20 border border-purple-800/30 rounded-xl p-4 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-sm font-semibold text-purple-300 flex items-center gap-1.5">
+                      <Brain className="size-4" /> Observaciones de la IA
+                    </h4>
+                    <button onClick={() => setAiInsights(null)} className="text-zinc-500 hover:text-zinc-300 text-xs">✕</button>
+                  </div>
+                  {aiInsights.map((insight, i) => (
+                    <p key={i} className="text-xs text-purple-200/70">• {insight}</p>
+                  ))}
+                </div>
+              )}
               {blocks.map((block) => (
                 <div key={block.id} className={`border rounded-xl p-4 ${getBlockColor(block.type)}`}>
                   <div className="flex items-start justify-between gap-3">

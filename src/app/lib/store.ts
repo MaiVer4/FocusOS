@@ -6,6 +6,8 @@ import {
   getProductivityScore, getCategoryBonus, getOptimalDuration,
   smartAssignTasksToSlots,
 } from './learning-engine';
+import { generateAISchedule, getAIDailySummary, resetAIClient } from './ai-engine';
+import type { AIScheduleResult, AIDailySummary } from './ai-engine';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -906,6 +908,8 @@ class Store {
   updateSettings(updates: Partial<UserSettings>): void {
     this.settings = { ...this.settings, ...updates };
     saveToStorage(STORAGE_KEYS.settings, this.settings);
+    // Si cambió la API key, resetear el cliente de IA
+    if (updates.geminiApiKey !== undefined) resetAIClient();
   }
 
   resetSettings(): void {
@@ -997,6 +1001,100 @@ class Store {
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
     }
     return removed;
+  }
+
+  // ─── AI Integration ───────────────────────────────────────────────────────
+
+  /** Verifica si la IA está configurada */
+  isAIEnabled(): boolean {
+    return !!this.settings.geminiApiKey && this.settings.geminiApiKey.trim().length > 10;
+  }
+
+  /**
+   * Genera un horario usando Gemini AI.
+   * Envía todo el contexto (settings, perfil, tareas, métricas) a la IA
+   * para que genere un horario personalizado.
+   */
+  async generateWithAI(date: string): Promise<{ blocks: Block[]; insights: string[] }> {
+    if (!this.isAIEnabled()) {
+      throw new Error('API key de Gemini no configurada. Ve a Configuración > IA.');
+    }
+
+    const existing = this.getBlocks(date);
+    if (existing.length > 0) {
+      throw new Error('Ya existen bloques para este día. Elimina los bloques primero.');
+    }
+
+    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const tasks = this.getTasksForDayWithCarryOver(date);
+    const recentMetrics = this.metrics.slice(-14); // últimas 2 semanas
+
+    const result: AIScheduleResult = await generateAISchedule(
+      this.settings.geminiApiKey!,
+      date,
+      dayOfWeek,
+      tasks,
+      this.settings,
+      this.profile,
+      recentMetrics,
+      existing,
+    );
+
+    // Crear bloques reales a partir de la respuesta de la IA
+    const taskMap = new Map(tasks.map(t => [t.id, t]));
+    const newBlocks: Block[] = [];
+
+    for (const aiBlock of result.blocks) {
+      const [sh, sm] = aiBlock.startTime.split(':').map(Number);
+      const [eh, em] = aiBlock.endTime.split(':').map(Number);
+      const duration = (eh * 60 + em) - (sh * 60 + sm);
+
+      if (duration <= 0) continue;
+
+      const task = aiBlock.taskId ? taskMap.get(aiBlock.taskId) : undefined;
+
+      const block: Block = {
+        id: crypto.randomUUID(),
+        type: aiBlock.type,
+        label: aiBlock.label,
+        priority: aiBlock.priority,
+        taskId: aiBlock.taskId,
+        task,
+        duration,
+        startTime: aiBlock.startTime,
+        endTime: aiBlock.endTime,
+        status: 'pending',
+        date,
+        interruptions: 0,
+      };
+      this.addBlock(block);
+      newBlocks.push(block);
+    }
+
+    return { blocks: newBlocks, insights: result.insights };
+  }
+
+  /**
+   * Obtiene un resumen/análisis del día generado por IA.
+   */
+  async getAISummary(date: string): Promise<AIDailySummary> {
+    if (!this.isAIEnabled()) {
+      throw new Error('API key de Gemini no configurada.');
+    }
+
+    const blocks = this.getBlocks(date);
+    const tasks = this.tasks.filter(t => t.status !== 'terminada');
+    const recentMetrics = this.metrics.slice(-14);
+
+    return getAIDailySummary(
+      this.settings.geminiApiKey!,
+      date,
+      blocks,
+      tasks,
+      this.settings,
+      this.profile,
+      recentMetrics,
+    );
   }
 
   // ─── Learning Profile ──────────────────────────────────────────────────────

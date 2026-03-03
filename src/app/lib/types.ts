@@ -68,4 +68,5 @@ export interface UserSettings {
   exerciseMandatory: boolean;
   exerciseDuration: number;
   socialMediaMaxMinutes: number;
+  geminiApiKey?: string; // API key para IA (Gemini)
 }

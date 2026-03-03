@@ -1,13 +1,17 @@
 import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
+import { validateApiKey } from '../lib/ai-engine';
 import { UserSettings } from '../lib/types';
-import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw } from 'lucide-react';
+import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Brain, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export function Settings() {
   const [settings, setSettings] = useState<UserSettings>(store.getSettings());
   const [saved, setSaved] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [validatingKey, setValidatingKey] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
 
   useEffect(() => {
     setNotificationsEnabled(notificationService.hasPermission());
@@ -250,6 +254,77 @@ export function Settings() {
               <Bell className="size-4" />
               Probar notificación
             </button>
+          )}
+        </div>
+
+        {/* AI Configuration */}
+        <div className="bg-gradient-to-br from-purple-900/20 to-indigo-900/20 border border-purple-800/30 rounded-2xl p-5 space-y-4">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Brain className="size-4 text-purple-400" /> Inteligencia Artificial
+          </h3>
+          <p className="text-xs text-zinc-400">
+            Conecta Google Gemini para generar horarios inteligentes basados en tu historial de productividad.
+          </p>
+
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">API Key de Gemini</label>
+            <div className="relative">
+              <input
+                type={showApiKey ? 'text' : 'password'}
+                value={settings.geminiApiKey ?? ''}
+                onChange={(e) => {
+                  update('geminiApiKey', e.target.value);
+                  setKeyStatus('idle');
+                }}
+                placeholder="AIza..."
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 pr-12 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => setShowApiKey(v => !v)}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+              >
+                {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+              </button>
+            </div>
+            <p className="text-xs text-zinc-500 mt-1">
+              Obtén tu key gratis en{' '}
+              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
+                className="text-purple-400 underline hover:text-purple-300">Google AI Studio</a>
+            </p>
+          </div>
+
+          {settings.geminiApiKey && settings.geminiApiKey.trim().length > 5 && (
+            <button
+              type="button"
+              disabled={validatingKey}
+              onClick={async () => {
+                setValidatingKey(true);
+                setKeyStatus('idle');
+                const valid = await validateApiKey(settings.geminiApiKey!);
+                setKeyStatus(valid ? 'valid' : 'invalid');
+                setValidatingKey(false);
+              }}
+              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
+            >
+              {validatingKey ? (
+                <><Loader2 className="size-4 animate-spin" /> Validando...</>
+              ) : keyStatus === 'valid' ? (
+                <span className="text-green-400">✓ API Key válida</span>
+              ) : keyStatus === 'invalid' ? (
+                <span className="text-red-400">✗ API Key inválida</span>
+              ) : (
+                <><Brain className="size-4" /> Verificar conexión</>
+              )}
+            </button>
+          )}
+
+          {store.isAIEnabled() && (
+            <div className="bg-purple-900/30 border border-purple-800/40 rounded-xl p-3">
+              <p className="text-xs text-purple-300">
+                🧠 IA activa. En el Planner verás el botón <strong>"Generar con IA"</strong> para crear horarios inteligentes.
+              </p>
+            </div>
           )}
         </div>
 
