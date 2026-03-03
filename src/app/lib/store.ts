@@ -918,7 +918,10 @@ class Store {
       updates.aiProvider = updates.aiProvider ?? 'gemini';
     }
     this.settings = { ...this.settings, ...updates };
-    saveToStorage(STORAGE_KEYS.settings, this.settings);
+    // Guardar en localStorage
+    localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(this.settings));
+    // Subir inmediatamente a la nube (sin debounce) para evitar pérdida al refrescar
+    cloudSync.uploadImmediate('settings', this.settings);
     if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined || updates.geminiApiKey !== undefined) {
       resetAIClient();
     }

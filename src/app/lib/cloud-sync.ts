@@ -247,6 +247,22 @@ class CloudSync {
     }
   }
 
+  /** Sube inmediatamente sin debounce (para datos críticos como settings) */
+  uploadImmediate(collection: string, data: unknown): void {
+    if ((COLLECTIONS as readonly string[]).includes(collection)) {
+      this.setLocalUpdatedAt(collection as Collection, Date.now());
+    }
+    // Cancelar debounce pendiente si hay
+    if (this.debounceTimers[collection]) {
+      clearTimeout(this.debounceTimers[collection]);
+      delete this.debounceTimers[collection];
+    }
+    delete this.pendingUploads[collection];
+    if (this.active) {
+      this.doUpload(collection, data);
+    }
+  }
+
   /** Sube todos los uploads pendientes acumulados antes de conectar */
   private async flushPending(): Promise<void> {
     const entries = Object.entries(this.pendingUploads);
