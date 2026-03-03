@@ -44,62 +44,243 @@ type TemplateBlock = {
   assignTask?: boolean;
 };
 
-/** Lunes a Viernes — Día SENA */
-const WEEKDAY_TEMPLATE: TemplateBlock[] = [
-  { type: 'rest',     label: 'Despertar y rutina matutina', startTime: '08:30', endTime: '08:50', priority: 'low' },
-  { type: 'rest',     label: 'Desayuno',                    startTime: '09:00', endTime: '09:20', priority: 'low' },
-  { type: 'rest',     label: 'Preparar escritorio',          startTime: '09:20', endTime: '09:30', priority: 'medium' },
-  { type: 'light',    label: 'Estudio ligero',               startTime: '09:30', endTime: '10:30', priority: 'medium', assignTask: true },
-  { type: 'rest',     label: 'Tiempo libre (redes)',          startTime: '10:30', endTime: '11:00', priority: 'low' },
-  { type: 'rest',     label: 'Vestirse y prepararse',         startTime: '11:00', endTime: '11:15', priority: 'low' },
-  { type: 'rest',     label: 'Transporte al SENA',            startTime: '11:15', endTime: '12:00', priority: 'low' },
-  { type: 'light',    label: 'SENA – Clases',                startTime: '12:00', endTime: '18:00', priority: 'high' },
-  { type: 'rest',     label: 'Llegada y cena',               startTime: '18:30', endTime: '19:30', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 1',             startTime: '19:30', endTime: '20:10', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Descanso',                     startTime: '20:10', endTime: '20:20', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 2',             startTime: '20:20', endTime: '21:00', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Descanso corto',               startTime: '21:00', endTime: '21:10', priority: 'low' },
-  { type: 'deep',     label: 'Bloque profundo 3',             startTime: '21:10', endTime: '21:30', priority: 'high', assignTask: true },
-  { type: 'exercise', label: 'Ejercicio',                    startTime: '21:30', endTime: '22:10', priority: 'high' },
-  { type: 'rest',     label: 'Ducha',                        startTime: '22:10', endTime: '22:30', priority: 'low' },
-  { type: 'light',    label: 'Revisión y documentación',      startTime: '22:30', endTime: '23:00', priority: 'medium', assignTask: true },
-  { type: 'rest',     label: 'Redes sociales',               startTime: '23:00', endTime: '23:15', priority: 'low' },
-  { type: 'rest',     label: 'Prepararse para dormir',        startTime: '23:15', endTime: '23:45', priority: 'low' },
-];
+// ─── Utilidades de tiempo para plantillas ────────────────────────────────────
 
-/** Sábado — Proyecto personal */
-const SATURDAY_TEMPLATE: TemplateBlock[] = [
-  { type: 'rest',     label: 'Despertar',                     startTime: '09:00', endTime: '09:30', priority: 'low' },
-  { type: 'rest',     label: 'Desayuno tranquilo',            startTime: '09:30', endTime: '10:00', priority: 'low' },
-  { type: 'deep',     label: 'Proyecto personal – Bloque 1',  startTime: '10:00', endTime: '11:00', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Descanso',                     startTime: '11:00', endTime: '11:10', priority: 'low' },
-  { type: 'deep',     label: 'Proyecto personal – Bloque 2',  startTime: '11:10', endTime: '12:00', priority: 'high', assignTask: true },
-  { type: 'rest',     label: 'Almuerzo y descanso',           startTime: '12:00', endTime: '13:00', priority: 'low' },
-  { type: 'rest',     label: 'Tiempo libre',                  startTime: '13:00', endTime: '18:00', priority: 'low' },
-  { type: 'exercise', label: 'Ejercicio',                    startTime: '18:00', endTime: '19:00', priority: 'high' },
-  { type: 'rest',     label: 'Ducha y cena',                  startTime: '19:00', endTime: '19:45', priority: 'low' },
-  { type: 'rest',     label: 'Tiempo libre moderado',         startTime: '19:45', endTime: '23:00', priority: 'low' },
-  { type: 'rest',     label: 'Prepararse para dormir',        startTime: '23:00', endTime: '23:30', priority: 'low' },
-];
+const _toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+const _toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
-/** Domingo — Organización */
-const SUNDAY_TEMPLATE: TemplateBlock[] = [
-  { type: 'rest',     label: 'Despertar y mañana libre',      startTime: '09:00', endTime: '12:00', priority: 'low' },
-  { type: 'rest',     label: 'Almuerzo',                      startTime: '12:00', endTime: '13:00', priority: 'low' },
-  { type: 'rest',     label: 'Tiempo libre',                  startTime: '13:00', endTime: '17:00', priority: 'low' },
-  { type: 'light',    label: 'Planear semana – entregas y prioridades', startTime: '17:00', endTime: '18:00', priority: 'high', assignTask: true },
-  { type: 'exercise', label: 'Ejercicio ligero',              startTime: '18:00', endTime: '18:30', priority: 'medium' },
-  { type: 'rest',     label: 'Descanso',                      startTime: '18:30', endTime: '19:00', priority: 'low' },
-  { type: 'rest',     label: 'Ducha y cena',                  startTime: '19:00', endTime: '19:45', priority: 'low' },
-  { type: 'rest',     label: 'Tiempo libre (relajarse)',       startTime: '19:45', endTime: '22:00', priority: 'low' },
-  { type: 'rest',     label: 'Prepararse para dormir temprano', startTime: '22:00', endTime: '22:30', priority: 'low' },
-];
+/** Agrega un bloque a la lista y avanza el cursor. Retorna nuevo cursor. */
+function _push(
+  blocks: TemplateBlock[],
+  cursor: number,
+  duration: number,
+  type: BlockType,
+  label: string,
+  priority: BlockPriority,
+  assignTask?: boolean,
+): number {
+  blocks.push({ type, label, startTime: _toTime(cursor), endTime: _toTime(cursor + duration), priority, assignTask });
+  return cursor + duration;
+}
+
+// ─── Generadores dinámicos de plantilla ──────────────────────────────────────
+
+/** Lunes a Viernes — construido dinámicamente desde Settings */
+function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
+  const blocks: TemplateBlock[] = [];
+  const wake = _toMin(s.wakeTime);
+  const sleep = _toMin(s.sleepTime);
+  const formalStart = _toMin(s.scheduleStartTime);
+  const formalEnd = _toMin(s.scheduleEndTime);
+  const arrival = _toMin(s.arrivalTime);
+  const deepDur = s.deepBlockDuration || 40;
+  const exDur = s.exerciseDuration || 40;
+  const deepMax = s.dailyDeepBlocksMax || 3;
+
+  let c = wake; // cursor en minutos
+
+  // ═══ MAÑANA: wakeTime → scheduleStartTime ═══
+  const morningWindow = formalStart - wake;
+
+  if (morningWindow >= 20) {
+    c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
+  }
+  if (morningWindow >= 50) {
+    c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
+  }
+  // Estudio ligero matutino si hay ≥ 60 min de ventana extra
+  if (morningWindow >= 110) {
+    const studyTime = Math.min(60, formalStart - c - 30); // reservar 30 min prep/transporte
+    if (studyTime >= 30) {
+      c = _push(blocks, c, studyTime, 'light', 'Estudio ligero', 'medium', true);
+    }
+  }
+  // Prepararse y transporte
+  if (morningWindow >= 75) {
+    const remaining = formalStart - c;
+    if (remaining >= 30) {
+      c = _push(blocks, c, 15, 'rest', 'Vestirse y prepararse', 'low');
+      c = _push(blocks, c, formalStart - c, 'rest', 'Transporte', 'low');
+    } else if (remaining >= 15) {
+      c = _push(blocks, c, remaining, 'rest', 'Prepararse', 'low');
+    }
+  }
+
+  // ═══ FORMAL: scheduleStartTime → scheduleEndTime ═══
+  blocks.push({
+    type: 'light', label: 'Actividades formales',
+    startTime: s.scheduleStartTime, endTime: s.scheduleEndTime,
+    priority: 'high',
+  });
+
+  // ═══ TRANSICIÓN: scheduleEndTime → arrivalTime ═══
+  if (arrival > formalEnd) {
+    blocks.push({
+      type: 'rest', label: 'Transporte de regreso',
+      startTime: s.scheduleEndTime, endTime: s.arrivalTime,
+      priority: 'low',
+    });
+  }
+
+  // ═══ TARDE/NOCHE: arrivalTime → sleepTime ═══
+  c = arrival;
+
+  // Cena (45 min o lo que quepa)
+  const dinnerDur = Math.min(45, sleep - c - 60);
+  if (dinnerDur >= 20) {
+    c = _push(blocks, c, dinnerDur, 'rest', 'Llegada y cena', 'low');
+  }
+
+  // Bloques profundos con descansos
+  const breakDur = 10;
+  for (let i = 0; i < deepMax; i++) {
+    if (c + deepDur > sleep - 30) break; // reservar 30 min para cierre del día
+    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${i + 1}`, 'high', true);
+
+    // Descanso entre bloques (no después del último)
+    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
+      c = _push(blocks, c, breakDur, 'rest', i < deepMax - 2 ? 'Descanso' : 'Descanso corto', 'low');
+    }
+  }
+
+  // Ejercicio
+  if (s.exerciseMandatory && c + exDur <= sleep - 20) {
+    c = _push(blocks, c, exDur, 'exercise', 'Ejercicio', 'high');
+    if (c + 20 <= sleep - 10) {
+      c = _push(blocks, c, 20, 'rest', 'Ducha', 'low');
+    }
+  }
+
+  // Revisión y documentación
+  if (c + 30 <= sleep - 10) {
+    c = _push(blocks, c, 30, 'light', 'Revisión y documentación', 'medium', true);
+  }
+
+  // Redes sociales
+  const socialTime = Math.min(s.socialMediaMaxMinutes || 15, 15);
+  if (socialTime >= 5 && c + socialTime <= sleep) {
+    c = _push(blocks, c, socialTime, 'rest', 'Redes sociales', 'low');
+  }
+
+  // Prepararse para dormir
+  const windDown = Math.min(30, sleep - c);
+  if (windDown >= 10) {
+    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir', 'low');
+  }
+
+  return blocks;
+}
+
+/** Sábado — construido dinámicamente desde Settings */
+function generateSaturdayTemplate(s: UserSettings): TemplateBlock[] {
+  const blocks: TemplateBlock[] = [];
+  const wake = _toMin(s.wakeTime);
+  const sleep = _toMin(s.sleepTime);
+  const deepDur = s.deepBlockDuration || 60;
+  const exDur = s.exerciseDuration || 60;
+
+  let c = wake;
+
+  // Mañana tranquila
+  c = _push(blocks, c, 30, 'rest', 'Despertar', 'low');
+  c = _push(blocks, c, 30, 'rest', 'Desayuno tranquilo', 'low');
+
+  // Bloques de proyecto personal
+  if (c + deepDur <= wake + 240) { // dentro de las primeras 4h
+    c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 1', 'high', true);
+    c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
+    if (c + deepDur <= wake + 300) {
+      c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 2', 'high', true);
+    }
+  }
+
+  // Almuerzo
+  c = _push(blocks, c, 60, 'rest', 'Almuerzo y descanso', 'low');
+
+  // Tiempo libre hasta la tarde
+  const exerciseStart = Math.max(c, sleep - 300); // ~5h antes de dormir
+  if (exerciseStart > c) {
+    c = _push(blocks, c, exerciseStart - c, 'rest', 'Tiempo libre', 'low');
+  }
+
+  // Ejercicio
+  if (s.exerciseMandatory && c + exDur <= sleep - 60) {
+    c = _push(blocks, c, exDur, 'exercise', 'Ejercicio', 'high');
+  }
+
+  // Ducha y cena
+  c = _push(blocks, c, 45, 'rest', 'Ducha y cena', 'low');
+
+  // Tiempo libre nocturno
+  const windDownStart = sleep - 30;
+  if (c < windDownStart) {
+    c = _push(blocks, c, windDownStart - c, 'rest', 'Tiempo libre moderado', 'low');
+  }
+
+  // Dormir
+  const windDown = sleep - c;
+  if (windDown >= 10) {
+    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir', 'low');
+  }
+
+  return blocks;
+}
+
+/** Domingo — construido dinámicamente desde Settings */
+function generateSundayTemplate(s: UserSettings): TemplateBlock[] {
+  const blocks: TemplateBlock[] = [];
+  const wake = _toMin(s.wakeTime);
+  const sleep = _toMin(s.sleepTime);
+
+  let c = wake;
+
+  // Mañana libre
+  const noon = Math.max(c + 60, 12 * 60);
+  c = _push(blocks, c, noon - c, 'rest', 'Despertar y mañana libre', 'low');
+
+  // Almuerzo
+  c = _push(blocks, c, 60, 'rest', 'Almuerzo', 'low');
+
+  // Tiempo libre
+  const planStart = Math.max(c, sleep - 360); // ~6h antes de dormir
+  if (planStart > c) {
+    c = _push(blocks, c, planStart - c, 'rest', 'Tiempo libre', 'low');
+  }
+
+  // Planear semana
+  c = _push(blocks, c, 60, 'light', 'Planear semana – entregas y prioridades', 'high', true);
+
+  // Ejercicio ligero
+  if (s.exerciseMandatory && c + 30 <= sleep - 90) {
+    c = _push(blocks, c, 30, 'exercise', 'Ejercicio ligero', 'medium');
+  }
+
+  // Descanso
+  c = _push(blocks, c, 30, 'rest', 'Descanso', 'low');
+
+  // Ducha y cena
+  c = _push(blocks, c, 45, 'rest', 'Ducha y cena', 'low');
+
+  // Tiempo libre nocturno
+  const windDownStart = sleep - 30;
+  if (c < windDownStart) {
+    c = _push(blocks, c, windDownStart - c, 'rest', 'Tiempo libre (relajarse)', 'low');
+  }
+
+  // Dormir temprano
+  const windDown = sleep - c;
+  if (windDown >= 10) {
+    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir temprano', 'low');
+  }
+
+  return blocks;
+}
 
 /** Retorna la plantilla adecuada según el día de la semana (0=dom … 6=sáb) */
-function getTemplateForDay(dayOfWeek: number): TemplateBlock[] {
-  if (dayOfWeek === 6) return SATURDAY_TEMPLATE;
-  if (dayOfWeek === 0) return SUNDAY_TEMPLATE;
-  return WEEKDAY_TEMPLATE;
+function getTemplateForDay(dayOfWeek: number, settings: UserSettings): TemplateBlock[] {
+  if (dayOfWeek === 6) return generateSaturdayTemplate(settings);
+  if (dayOfWeek === 0) return generateSundayTemplate(settings);
+  return generateWeekdayTemplate(settings);
 }
 
 // ─── Smart Task Scheduling ──────────────────────────────────────────────────
@@ -631,7 +812,7 @@ class Store {
     if (existing.length > 0) return [];
 
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
-    const template = getTemplateForDay(dayOfWeek);
+    const template = getTemplateForDay(dayOfWeek, this.settings);
 
     const tasks = this.getTasksForDayWithCarryOver(date);
     const newBlocks: Block[] = [];
