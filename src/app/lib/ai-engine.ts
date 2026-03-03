@@ -145,18 +145,46 @@ function buildContextPrompt(
   settings: UserSettings,
   profile: LearnedProfile | null,
   recentMetrics: DailyMetrics[],
+  dayOfWeek?: number,
 ): string {
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
   const lines: string[] = [
     '=== CONTEXTO DEL USUARIO ===',
     `Hora de despertar: ${settings.wakeTime}`,
     `Hora de dormir: ${settings.sleepTime}`,
-    `Horario de actividades formales: ${settings.scheduleStartTime} - ${settings.scheduleEndTime}`,
-    `Hora de llegada a casa: ${settings.arrivalTime}`,
     `Pico de energía: ${settings.peakEnergyTime}`,
     `Bloques profundos: ${settings.dailyDeepBlocksMin}-${settings.dailyDeepBlocksMax} diarios, ${settings.deepBlockDuration} min c/u`,
     `Ejercicio: ${settings.exerciseMandatory ? `obligatorio, ${settings.exerciseDuration} min` : 'opcional'}`,
     `Máx. redes sociales: ${settings.socialMediaMaxMinutes} min/día`,
+    '',
+    '=== ESTRUCTURA HORARIA DEL DÍA (OBLIGATORIO RESPETAR) ===',
   ];
+
+  if (isWeekend) {
+    lines.push(
+      `Tipo de día: FIN DE SEMANA (${dayOfWeek === 6 ? 'sábado' : 'domingo'})`,
+      `Todo el día es libre desde ${settings.wakeTime} hasta ${settings.sleepTime}.`,
+      `NO hay actividades formales. Puedes programar bloques de estudio/ejercicio/descanso libremente.`,
+      `Ventana disponible: ${settings.wakeTime} - ${settings.sleepTime}`,
+    );
+  } else {
+    lines.push(
+      `Tipo de día: ENTRE SEMANA (lunes a viernes)`,
+      `Horario de actividades formales (clases/trabajo): ${settings.scheduleStartTime} - ${settings.scheduleEndTime}`,
+      `Hora de llegada a casa tras formales: ${settings.arrivalTime}`,
+      '',
+      '⚠️ VENTANAS DE TIEMPO DISPONIBLES (solo puedes programar bloques aquí):',
+      `  🌅 MAÑANA: ${settings.wakeTime} - ${settings.scheduleStartTime}`,
+      `     → Rutina matutina, desayuno, estudio ligero, prepararse`,
+      `  🏫 FORMAL (BLOQUEADO): ${settings.scheduleStartTime} - ${settings.scheduleEndTime}`,
+      `     → PROHIBIDO programar bloques de estudio/ejercicio aquí. Solo UN bloque tipo "rest" o "light" con label de la actividad formal.`,
+      `  🚌 TRANSICIÓN: ${settings.scheduleEndTime} - ${settings.arrivalTime}`,
+      `     → Transporte de regreso. Solo bloque tipo "rest".`,
+      `  🌙 TARDE/NOCHE: ${settings.arrivalTime} - ${settings.sleepTime}`,
+      `     → Cena, bloques profundos de estudio, ejercicio, descanso, prepararse para dormir`,
+    );
+  }
 
   if (profile && profile.totalBlocksAnalyzed >= 5) {
     lines.push('', '=== PERFIL DE PRODUCTIVIDAD APRENDIDO ===');
@@ -228,9 +256,11 @@ export async function generateAISchedule(
 ): Promise<AIScheduleResult> {
   const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+
   const prompt = `Eres un asistente experto en productividad y gestión del tiempo. Genera un horario diario optimizado para un estudiante.
 
-${buildContextPrompt(settings, profile, recentMetrics)}
+${buildContextPrompt(settings, profile, recentMetrics, dayOfWeek)}
 
 ${buildTasksPrompt(tasks)}
 
@@ -239,17 +269,28 @@ ${buildExistingBlocksPrompt(existingBlocks)}
 === INSTRUCCIONES ===
 Genera un horario optimizado para: ${date} (${dayNames[dayOfWeek]})
 
-Reglas:
+REGLAS ESTRICTAS DE HORARIO (OBLIGATORIO):
+- ❌ PROHIBIDO crear bloques que empiecen ANTES de ${settings.wakeTime} o terminen DESPUÉS de ${settings.sleepTime}
+${isWeekend
+  ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
+  : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario tiene actividades formales
+- ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
+- ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, estudio ligero
+- ✅ Bloque FORMAL: colocar UN SOLO bloque (type:"light", label:"Actividades formales") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}
+- ✅ Ventana TARDE/NOCHE: ${settings.arrivalTime} a ${settings.sleepTime} → cena, bloques profundos, ejercicio, descanso`
+}
+
+REGLAS GENERALES:
 1. Cada bloque: type (deep|light|exercise|rest), label, startTime (HH:mm), endTime (HH:mm), priority (high|medium|low)
-2. Todo bloque NO-rest DEBE tener taskId de las tareas pendientes
-3. Tareas urgentes/difíciles en franjas de mayor productividad
-4. Descansos de 5-15 min entre bloques
-5. Respetar horarios de despertar/dormir y actividades formales
-6. Incluir ejercicio si es obligatorio
-7. Sin solapamientos
-8. Comidas: desayuno, almuerzo, cena
-9. Tareas difíciles en franjas con mejor tasa de éxito
-10. Duraciones deep cercanas a la óptima aprendida
+2. Todo bloque deep/light DEBE tener taskId de las tareas pendientes (exercise y rest NO llevan taskId)
+3. Tareas urgentes/difíciles en franjas de mayor productividad (pico de energía: ${settings.peakEnergyTime})
+4. Descansos de 5-15 min entre bloques de estudio
+5. Incluir ejercicio si es obligatorio (${settings.exerciseMandatory ? 'SÍ es obligatorio' : 'no es obligatorio'})
+6. Sin solapamientos entre bloques
+7. Incluir comidas: desayuno, almuerzo/cena según horario
+8. Tareas difíciles/urgentes en franjas con mejor tasa de éxito del perfil
+9. Duraciones de bloques deep cercanas a ${settings.deepBlockDuration} min
+10. Generar entre ${settings.dailyDeepBlocksMin} y ${settings.dailyDeepBlocksMax} bloques profundos
 
 Responde SOLO con JSON válido (sin markdown, sin backticks):
 {
@@ -266,12 +307,51 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
     const parsed = JSON.parse(cleaned) as AIScheduleResult;
     if (!Array.isArray(parsed.blocks)) throw new Error('Respuesta sin bloques válidos');
 
+    // Validación de formato básico
     parsed.blocks = parsed.blocks.filter(b =>
       b.type && b.startTime && b.endTime && b.label &&
       ['deep', 'light', 'exercise', 'rest'].includes(b.type) &&
       /^\d{2}:\d{2}$/.test(b.startTime) && /^\d{2}:\d{2}$/.test(b.endTime)
     );
 
+    // ─── Validación de horario base ──────────────────────────────────
+    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const wakeMin = toMin(settings.wakeTime);
+    const sleepMin = toMin(settings.sleepTime);
+    const formalStartMin = toMin(settings.scheduleStartTime);
+    const formalEndMin = toMin(settings.scheduleEndTime);
+    const arrivalMin = toMin(settings.arrivalTime);
+
+    parsed.blocks = parsed.blocks.filter(b => {
+      const start = toMin(b.startTime);
+      const end = toMin(b.endTime);
+
+      // Rechazar bloques fuera del rango despertar-dormir
+      if (start < wakeMin || end > sleepMin) {
+        console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: fuera de horario ${settings.wakeTime}-${settings.sleepTime}`);
+        return false;
+      }
+
+      // Entre semana: rechazar bloques de estudio/ejercicio durante horario formal
+      if (!isWeekend && (b.type === 'deep' || b.type === 'exercise')) {
+        if (start < formalEndMin && end > formalStartMin) {
+          console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: se solapa con horario formal ${settings.scheduleStartTime}-${settings.scheduleEndTime}`);
+          return false;
+        }
+      }
+
+      // Entre semana: rechazar bloques de estudio en la franja de transporte
+      if (!isWeekend && (b.type === 'deep' || b.type === 'light') && b.label?.toLowerCase().indexOf('formal') === -1) {
+        if (start >= formalEndMin && start < arrivalMin) {
+          console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: franja de transporte ${settings.scheduleEndTime}-${settings.arrivalTime}`);
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    // Validar taskIds contra tareas reales
     const taskIds = new Set(tasks.map(t => t.id));
     for (const b of parsed.blocks)
       if (b.taskId && !taskIds.has(b.taskId)) b.taskId = undefined;
