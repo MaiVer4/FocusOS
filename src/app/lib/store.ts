@@ -439,9 +439,9 @@ class Store {
     const dayTasks = this.getTasksForDayWithCarryOver(date)
       .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
 
-    // Bloques libres (sin tarea, pendientes, de tipo deep/light)
+    // Bloques libres (sin tarea, pendientes, de tipo deep/light/exercise — no rest)
     const freeBlocks = dayBlocks.filter(
-      b => !b.taskId && b.status === 'pending' && (b.type === 'deep' || b.type === 'light')
+      b => !b.taskId && b.status === 'pending' && b.type !== 'rest'
     );
 
     const toAssign = Math.min(dayTasks.length, freeBlocks.length);
@@ -638,7 +638,8 @@ class Store {
       let taskId: string | undefined;
       let task: Task | undefined;
 
-      if (tmpl.assignTask && taskQueue.length > 0) {
+      // Asignar tarea a todo bloque que NO sea rest (deep, light, exercise)
+      if (tmpl.type !== 'rest' && taskQueue.length > 0) {
         task = taskQueue.shift()!;
         taskId = task.id;
       }
@@ -752,6 +753,24 @@ class Store {
 
   addBlock(block: Block): void {
     this.blocks = [...this.blocks, block];
+
+    // Auto-asignar tarea si el bloque no es rest y no tiene tarea
+    if (block.type !== 'rest' && !block.taskId) {
+      const dayBlocks = this.blocks.filter(b => b.date === block.date);
+      const tasksWithBlocks = new Set(
+        dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
+      );
+      const available = this.getTasksForDayWithCarryOver(block.date)
+        .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
+
+      if (available.length > 0) {
+        const task = available[0]; // ya ordenadas por urgencia
+        this.blocks = this.blocks.map(b =>
+          b.id === block.id ? { ...b, taskId: task.id, task } : b
+        );
+      }
+    }
+
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
   }
 
