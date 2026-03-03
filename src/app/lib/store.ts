@@ -1306,6 +1306,11 @@ class Store {
     // Crear bloques reales a partir de la respuesta de la IA
     const taskMap = new Map(tasks.map(t => [t.id, t]));
     const newBlocks: Block[] = [];
+    const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const formalStartMin = toMin(this.settings.scheduleStartTime);
+    const formalEndMin = toMin(this.settings.scheduleEndTime);
+    const arrivalMin = toMin(this.settings.arrivalTime);
 
     for (const aiBlock of result.blocks) {
       const [sh, sm] = aiBlock.startTime.split(':').map(Number);
@@ -1313,6 +1318,20 @@ class Store {
       const duration = (eh * 60 + em) - (sh * 60 + sm);
 
       if (duration <= 0) continue;
+
+      // Entre semana: descartar cualquier bloque que la IA coloque
+      // dentro del rango formal o transporte (se inyectan fijos abajo)
+      if (isWeekday) {
+        const bStart = sh * 60 + sm;
+        const bEnd = eh * 60 + em;
+        const labelLower = (aiBlock.label ?? '').toLowerCase();
+        const isFormalOrTransport = labelLower.includes('sena') || labelLower.includes('formal')
+          || labelLower.includes('transporte de regreso');
+        // Descartar si se solapa con el rango formal+transporte
+        if (isFormalOrTransport || (bStart < arrivalMin && bEnd > formalStartMin)) {
+          continue;
+        }
+      }
 
       const task = aiBlock.taskId ? taskMap.get(aiBlock.taskId) : undefined;
 
@@ -1332,6 +1351,44 @@ class Store {
       };
       this.addBlock(block);
       newBlocks.push(block);
+    }
+
+    // Entre semana: inyectar bloque SENA fijo + transporte de regreso
+    if (isWeekday) {
+      const senaBlock: Block = {
+        id: crypto.randomUUID(),
+        type: 'rest',
+        label: 'SENA',
+        priority: 'high',
+        duration: formalEndMin - formalStartMin,
+        startTime: this.settings.scheduleStartTime,
+        endTime: this.settings.scheduleEndTime,
+        status: 'pending',
+        date,
+        interruptions: 0,
+      };
+      this.addBlock(senaBlock);
+      newBlocks.push(senaBlock);
+
+      if (arrivalMin > formalEndMin) {
+        const transportBlock: Block = {
+          id: crypto.randomUUID(),
+          type: 'rest',
+          label: 'Transporte de regreso',
+          priority: 'low',
+          duration: arrivalMin - formalEndMin,
+          startTime: this.settings.scheduleEndTime,
+          endTime: this.settings.arrivalTime,
+          status: 'pending',
+          date,
+          interruptions: 0,
+        };
+        this.addBlock(transportBlock);
+        newBlocks.push(transportBlock);
+      }
+
+      // Ordenar por startTime para que la UI los muestre en orden
+      newBlocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
     }
 
     return { blocks: newBlocks, insights: result.insights };
