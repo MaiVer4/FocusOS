@@ -1,12 +1,18 @@
 import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
 import { addMinutesToTime, dateToStr, durationBetween, todayStr } from './helpers';
 import { cloudSync } from './cloud-sync';
+import {
+  analyzeHistory, LearnedProfile,
+  getProductivityScore, getCategoryBonus, getOptimalDuration,
+  smartAssignTasksToSlots,
+} from './learning-engine';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
   blocks: 'focusos_blocks',
   metrics: 'focusos_metrics',
   settings: 'focusos_settings',
+  profile: 'focusos_learned_profile',
 } as const;
 
 const DEFAULT_SETTINGS: UserSettings = {
@@ -112,11 +118,9 @@ const SESSIONS_PER_WEEK: Record<Difficulty, number> = {
  * - Dificultad (sesiones necesarias por semana)
  * - Si es entregable (isDeliverable)
  * - Si está vencida (overdue)
- *
- * Ejemplo: Tarea HIGH que se entrega en 2 días → urgencia ≈ 25
- *          Tarea LOW que se entrega en 7 días → urgencia ≈ 1.4
+ * - Perfil aprendido: categorías con bajo rendimiento se priorizan más
  */
-function calculateTaskUrgency(task: Task, referenceDate: string): number {
+function calculateTaskUrgency(task: Task, referenceDate: string, profile?: LearnedProfile | null): number {
   if (!task.dueDate || task.status === 'terminada') return -1;
 
   const dueStr = task.dueDate.split('T')[0];
@@ -140,6 +144,11 @@ function calculateTaskUrgency(task: Task, referenceDate: string): number {
 
   // Bonus extra por dificultad alta cuando quedan pocos días
   if (task.difficulty === 'high' && daysLeft <= 3) urgency *= 2;
+
+  // Bonus del perfil aprendido: categorías con bajo rendimiento → más urgencia
+  if (profile) {
+    urgency *= getCategoryBonus(profile, task);
+  }
 
   return urgency;
 }
@@ -176,6 +185,7 @@ const CLOUD_COLLECTIONS: Record<string, string> = {
   [STORAGE_KEYS.blocks]: 'blocks',
   [STORAGE_KEYS.metrics]: 'metrics',
   [STORAGE_KEYS.settings]: 'settings',
+  [STORAGE_KEYS.profile]: 'profile',
 };
 
 function saveToStorage<T>(key: string, value: T): void {
@@ -194,11 +204,14 @@ class Store {
   private blocks: Block[] = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
   private metrics: DailyMetrics[] = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
   private settings: UserSettings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
+  private profile: LearnedProfile = loadFromStorage<LearnedProfile>(STORAGE_KEYS.profile, null as any);
 
   constructor() {
     this.migrateTaskStatuses();
     // Persist merged settings so new default fields get saved
     saveToStorage(STORAGE_KEYS.settings, this.settings);
+    // Recalcular perfil de aprendizaje al iniciar
+    this.refreshProfile();
   }
 
   /** Migra status antiguos (pending/in-progress/completed) a los nuevos */
@@ -240,6 +253,7 @@ class Store {
     this.blocks = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
     this.metrics = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
     this.settings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
+    this.refreshProfile();
     this.notifyListeners();
   }
 
@@ -399,6 +413,7 @@ class Store {
   /**
    * Busca tareas del día que no tienen bloque asignado y las asigna
    * a bloques libres (sin tarea) del mismo día.
+   * Usa el perfil aprendido para asignar tareas difíciles a bloques más productivos.
    */
   private assignUnblockedTasks(date: string): void {
     const dayBlocks = this.getBlocks(date);
@@ -413,17 +428,32 @@ class Store {
       b => !b.taskId && b.status === 'pending' && b.type !== 'rest'
     );
 
-    const toAssign = Math.min(dayTasks.length, freeBlocks.length);
-    for (let i = 0; i < toAssign; i++) {
-      const block = freeBlocks[i];
-      const task = dayTasks[i];
-      this.blocks = this.blocks.map(b =>
-        b.id === block.id ? { ...b, taskId: task.id, task } : b
-      );
+    if (dayTasks.length === 0 || freeBlocks.length === 0) return;
+
+    if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
+      // Asignación inteligente con perfil
+      const blockSlots = freeBlocks.map((b, i) => ({
+        index: i, type: b.type, startTime: b.startTime,
+      }));
+      const assignment = smartAssignTasksToSlots(dayTasks, blockSlots, this.profile);
+      for (const [idx, task] of assignment) {
+        const block = freeBlocks[idx];
+        this.blocks = this.blocks.map(b =>
+          b.id === block.id ? { ...b, taskId: task.id, task } : b
+        );
+      }
+    } else {
+      // Sin perfil: asignar en orden
+      const toAssign = Math.min(dayTasks.length, freeBlocks.length);
+      for (let i = 0; i < toAssign; i++) {
+        const block = freeBlocks[i];
+        const task = dayTasks[i];
+        this.blocks = this.blocks.map(b =>
+          b.id === block.id ? { ...b, taskId: task.id, task } : b
+        );
+      }
     }
-    if (toAssign > 0) {
-      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-    }
+    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
   }
 
   toggleSubtask(taskId: string, subtaskId: string): void {
@@ -496,10 +526,10 @@ class Store {
       }
     }
 
-    // Ordenar por urgencia (mayor primero)
+    // Ordenar por urgencia (mayor primero) — usa perfil aprendido
     return all.sort((a, b) => {
-      const ua = calculateTaskUrgency(a, date);
-      const ub = calculateTaskUrgency(b, date);
+      const ua = calculateTaskUrgency(a, date, this.profile);
+      const ub = calculateTaskUrgency(b, date, this.profile);
       return ub - ua;
     });
   }
@@ -587,9 +617,9 @@ class Store {
 
   /**
    * Genera la rutina diaria desde la plantilla adecuada según el día de la semana.
-   * Sáb → proyecto personal · Dom → organización · Lun–Vie → SENA.
-   * Asigna tareas pendientes a los bloques marcados.
-   * No duplica si ya existen bloques para esa fecha.
+   * Usa el perfil aprendido para:
+   *  - Asignar tareas difíciles a los bloques de mayor productividad
+   *  - Ajustar duraciones según historial
    */
   generateFromTemplate(date: string): Block[] {
     const existing = this.getBlocks(date);
@@ -599,36 +629,77 @@ class Store {
     const template = getTemplateForDay(dayOfWeek);
 
     const tasks = this.getTasksForDayWithCarryOver(date);
-    const taskQueue = [...tasks];
     const newBlocks: Block[] = [];
 
-    for (const tmpl of template) {
-      const duration = durationBetween(tmpl.startTime, tmpl.endTime);
-      let taskId: string | undefined;
-      let task: Task | undefined;
+    // Primero crear todos los bloques sin tareas
+    const blockSlots: Array<{ index: number; type: BlockType; startTime: string }> = [];
 
-      // Asignar tarea a todo bloque que NO sea rest (deep, light, exercise)
-      if (tmpl.type !== 'rest' && taskQueue.length > 0) {
-        task = taskQueue.shift()!;
-        taskId = task.id;
+    for (let i = 0; i < template.length; i++) {
+      const tmpl = template[i];
+      let duration = durationBetween(tmpl.startTime, tmpl.endTime);
+
+      // Si hay perfil y datos suficientes, ajustar duración de bloques deep/light
+      if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
+        if (tmpl.type === 'deep') {
+          const optimal = getOptimalDuration(this.profile, 'deep');
+          // Solo ajustar si la diferencia es significativa (±15 min)
+          if (Math.abs(optimal - duration) > 15) {
+            duration = Math.max(20, Math.min(optimal, 120)); // entre 20 y 120 min
+          }
+        } else if (tmpl.type === 'light') {
+          const optimal = getOptimalDuration(this.profile, 'light');
+          if (Math.abs(optimal - duration) > 15) {
+            duration = Math.max(15, Math.min(optimal, 90));
+          }
+        }
       }
+
+      const endTime = addMinutesToTime(tmpl.startTime, duration);
 
       const block: Block = {
         id: crypto.randomUUID(),
         type: tmpl.type,
         label: tmpl.label,
         priority: tmpl.priority,
-        taskId,
-        task,
         duration,
         startTime: tmpl.startTime,
-        endTime: tmpl.endTime,
+        endTime,
         status: 'pending',
         date,
         interruptions: 0,
       };
-      this.addBlock(block);
       newBlocks.push(block);
+
+      // Registrar slots donde se puede asignar tarea (no rest)
+      if (tmpl.type !== 'rest') {
+        blockSlots.push({ index: i, type: tmpl.type, startTime: tmpl.startTime });
+      }
+    }
+
+    // Asignar tareas a bloques usando el perfil aprendido
+    if (tasks.length > 0 && blockSlots.length > 0) {
+      if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
+        // Asignación inteligente: tareas difíciles → franjas más productivas
+        const assignment = smartAssignTasksToSlots(tasks, blockSlots, this.profile);
+        for (const [blockIdx, task] of assignment) {
+          newBlocks[blockIdx].taskId = task.id;
+          newBlocks[blockIdx].task = task;
+        }
+      } else {
+        // Sin suficiente historial: asignar en orden de urgencia
+        const taskQueue = [...tasks];
+        for (const slot of blockSlots) {
+          if (taskQueue.length === 0) break;
+          const task = taskQueue.shift()!;
+          newBlocks[slot.index].taskId = task.id;
+          newBlocks[slot.index].task = task;
+        }
+      }
+    }
+
+    // Guardar todos los bloques
+    for (const block of newBlocks) {
+      this.addBlock(block);
     }
 
     return newBlocks;
@@ -747,6 +818,11 @@ class Store {
     this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates } : b);
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
     this.recalcDailyMetrics(this.blocks.find(b => b.id === id)?.date ?? '');
+
+    // Refrescar perfil cuando un bloque se completa o falla
+    if (updates.status === 'completed' || updates.status === 'failed') {
+      this.refreshProfile();
+    }
   }
 
   deleteBlock(id: string): void {
@@ -921,6 +997,29 @@ class Store {
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
     }
     return removed;
+  }
+
+  // ─── Learning Profile ──────────────────────────────────────────────────────
+
+  /** Devuelve el perfil de aprendizaje actual */
+  getProfile(): LearnedProfile | null {
+    return this.profile;
+  }
+
+  /**
+   * Recalcula el perfil de aprendizaje desde el historial de bloques y tareas.
+   * Se ejecuta automáticamente al iniciar la app, al recargar datos remotos,
+   * y cuando se completa/falla un bloque.
+   */
+  refreshProfile(): void {
+    // Solo recalcular si hay datos suficientes
+    const terminal = this.blocks.filter(b => b.status === 'completed' || b.status === 'failed');
+    if (terminal.length < 5) {
+      this.profile = null as any;
+      return;
+    }
+    this.profile = analyzeHistory(this.blocks, this.tasks);
+    saveToStorage(STORAGE_KEYS.profile, this.profile);
   }
 
   clearAll(): void {
