@@ -633,9 +633,9 @@ class Store {
     const dayTasks = this.getTasksForDayWithCarryOver(date)
       .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
 
-    // Bloques libres (sin tarea, pendientes, de tipo deep/light/exercise — no rest)
+    // Bloques libres (sin tarea, pendientes, solo deep/light — no rest ni exercise)
     const freeBlocks = dayBlocks.filter(
-      b => !b.taskId && b.status === 'pending' && b.type !== 'rest'
+      b => !b.taskId && b.status === 'pending' && b.type !== 'rest' && b.type !== 'exercise'
     );
 
     if (dayTasks.length === 0 || freeBlocks.length === 0) return;
@@ -880,8 +880,8 @@ class Store {
       };
       newBlocks.push(block);
 
-      // Registrar slots donde se puede asignar tarea (no rest)
-      if (tmpl.type !== 'rest') {
+      // Registrar slots donde se puede asignar tarea (solo deep/light)
+      if (tmpl.type !== 'rest' && tmpl.type !== 'exercise') {
         blockSlots.push({ index: i, type: tmpl.type, startTime: tmpl.startTime });
       }
     }
@@ -1004,8 +1004,8 @@ class Store {
   addBlock(block: Block): void {
     this.blocks = [...this.blocks, block];
 
-    // Auto-asignar tarea si el bloque no es rest y no tiene tarea
-    if (block.type !== 'rest' && !block.taskId) {
+    // Auto-asignar tarea solo a bloques de estudio (deep/light)
+    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId) {
       const dayBlocks = this.blocks.filter(b => b.date === block.date);
       const tasksWithBlocks = new Set(
         dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
