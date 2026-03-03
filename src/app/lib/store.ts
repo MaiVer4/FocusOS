@@ -135,13 +135,19 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     c = _push(blocks, c, remainBeforeFormal, 'rest', 'Prepararse', 'low');
   }
 
-  // ═══ FORMAL: scheduleStartTime → scheduleEndTime ═══
-  // Usar max(cursor, formalStart) para evitar solapamiento con la rutina matutina
-  const actualFormalStart = Math.max(c, formalStart);
-  if (formalEnd > actualFormalStart) {
+  // ═══ FORMAL: scheduleStartTime → scheduleEndTime (fijo, no desplazable) ═══
+  if (formalEnd > formalStart) {
+    // Si la rutina matutina se extendió más allá de formalStart, recortar el último bloque
+    if (blocks.length > 0 && c > formalStart) {
+      const last = blocks[blocks.length - 1];
+      const lastEnd = _toMin(last.endTime);
+      if (lastEnd > formalStart) {
+        last.endTime = s.scheduleStartTime;
+      }
+    }
     blocks.push({
-      type: 'rest', label: 'Actividades formales',
-      startTime: _toTime(actualFormalStart), endTime: s.scheduleEndTime,
+      type: 'rest', label: 'SENA',
+      startTime: s.scheduleStartTime, endTime: s.scheduleEndTime,
       priority: 'high',
     });
   }
@@ -656,7 +662,7 @@ class Store {
       .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
 
     // Bloques libres (sin tarea, pendientes, solo deep/light de estudio — no rest, exercise, ni rutinas)
-    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
+    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
     const freeBlocks = dayBlocks.filter(
       b => !b.taskId && b.status === 'pending' && b.type !== 'rest' && b.type !== 'exercise'
         && !routineLabels.some(r => (b.label ?? '').toLowerCase().includes(r))
@@ -1029,7 +1035,7 @@ class Store {
     this.blocks = [...this.blocks, block];
 
     // Auto-asignar tarea solo a bloques de estudio (deep/light) que no sean rutinas
-    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
+    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
     const isRoutineBlock = routineLabels.some(r => (block.label ?? '').toLowerCase().includes(r));
     if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineBlock) {
       const dayBlocks = this.blocks.filter(b => b.date === block.date);

@@ -171,7 +171,7 @@ function buildContextPrompt(
   } else {
     lines.push(
       `Tipo de día: ENTRE SEMANA (lunes a viernes)`,
-      `Horario de actividades formales (clases/trabajo): ${settings.scheduleStartTime} - ${settings.scheduleEndTime}`,
+      `Horario SENA (formación): ${settings.scheduleStartTime} - ${settings.scheduleEndTime}`,
       `Hora de llegada a casa tras formales: ${settings.arrivalTime}`,
       '',
       '⚠️ VENTANAS DE TIEMPO DISPONIBLES (solo puedes programar bloques aquí):',
@@ -273,10 +273,10 @@ REGLAS ESTRICTAS DE HORARIO (OBLIGATORIO):
 - ❌ PROHIBIDO crear bloques que empiecen ANTES de ${settings.wakeTime} o terminen DESPUÉS de ${settings.sleepTime}
 ${isWeekend
   ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
-  : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario tiene actividades formales
+  : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA
 - ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
-- ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, estudio ligero
-- ✅ Bloque FORMAL: colocar UN SOLO bloque (type:"rest", label:"Actividades formales") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}. SIN taskId.
+- ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, bloques de estudio
+- ✅ Bloque SENA: colocar UN SOLO bloque (type:"rest", label:"SENA") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}. SIN taskId.
 - ✅ Ventana TARDE/NOCHE: ${settings.arrivalTime} a ${settings.sleepTime} → cena, bloques profundos, ejercicio, descanso`
 }
 
@@ -358,7 +358,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
       if (b.taskId && !taskIds.has(b.taskId)) b.taskId = undefined;
 
     // Strip taskId de bloques que no son de estudio (rest/exercise nunca llevan tarea)
-    const routineKeywords = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'rutina', 'despertar'];
+    const routineKeywords = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
     for (const b of parsed.blocks) {
       if (b.type === 'rest' || b.type === 'exercise') {
         b.taskId = undefined;
