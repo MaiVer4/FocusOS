@@ -778,17 +778,21 @@ export function Planner() {
               >
                 Auto
               </button>
-              {store.isAIEnabled() && (
-                <button
-                  onClick={handleAIGenerate}
-                  disabled={aiGenerating || blocks.length > 0}
-                  className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                  title={blocks.length > 0 ? 'Elimina los bloques primero' : 'Generar horario con IA'}
-                >
-                  {aiGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
-                  IA
-                </button>
-              )}
+              <button
+                onClick={() => {
+                  if (!store.isAIEnabled()) {
+                    alert('Configura tu API key de Gemini en Settings → Inteligencia Artificial');
+                    return;
+                  }
+                  handleAIGenerate();
+                }}
+                disabled={aiGenerating}
+                className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                title={!store.isAIEnabled() ? 'Configura API key en Settings' : blocks.length > 0 ? 'Elimina los bloques primero' : 'Generar horario con IA'}
+              >
+                {aiGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
+                IA
+              </button>
               <button
                 onClick={() => setShowAddBlock(true)}
                 className="p-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
