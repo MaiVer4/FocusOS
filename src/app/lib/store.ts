@@ -1040,7 +1040,7 @@ class Store {
    */
   async generateWithAI(date: string): Promise<{ blocks: Block[]; insights: string[] }> {
     if (!this.isAIEnabled()) {
-      throw new Error('API key de Gemini no configurada. Ve a Configuración > IA.');
+      throw new Error('API key de IA no configurada. Ve a Configuración > IA.');
     }
 
     const existing = this.getBlocks(date);
@@ -1048,16 +1048,18 @@ class Store {
       throw new Error('Ya existen bloques para este día. Elimina los bloques primero.');
     }
 
+    const { provider, apiKey } = this.getAIConfig();
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
     const tasks = this.getTasksForDayWithCarryOver(date);
-    const recentMetrics = this.metrics.slice(-14); // últimas 2 semanas
+    const recentMetrics = this.metrics.slice(-14);
 
     const result: AIScheduleResult = await generateAISchedule(
-      this.settings.geminiApiKey!,
+      provider,
+      apiKey,
       date,
       dayOfWeek,
       tasks,
-      this.settings,
+      this.getSettings(),
       this.profile,
       recentMetrics,
       existing,
@@ -1116,7 +1118,7 @@ class Store {
       date,
       blocks,
       tasks,
-      this.settings,
+      this.getSettings(),
       this.profile,
       recentMetrics,
     );
