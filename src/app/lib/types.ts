@@ -68,5 +68,7 @@ export interface UserSettings {
   exerciseMandatory: boolean;
   exerciseDuration: number;
   socialMediaMaxMinutes: number;
-  geminiApiKey?: string; // API key para IA (Gemini)
+  aiProvider?: 'groq' | 'gemini';  // Proveedor de IA (default: groq)
+  aiApiKey?: string;               // API key del proveedor seleccionado
+  geminiApiKey?: string;           // Legacy — migrado a aiApiKey
 }

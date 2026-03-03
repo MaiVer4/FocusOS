@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { validateApiKey, sanitizeApiKey } from '../lib/ai-engine';
+import type { AIProvider } from '../lib/ai-engine';
 import { UserSettings } from '../lib/types';
 import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Brain, Eye, EyeOff, Loader2 } from 'lucide-react';
 
@@ -263,20 +264,54 @@ export function Settings() {
             <Brain className="size-4 text-purple-400" /> Inteligencia Artificial
           </h3>
           <p className="text-xs text-zinc-400">
-            Conecta Google Gemini para generar horarios inteligentes basados en tu historial de productividad.
+            Conecta un proveedor de IA para generar horarios inteligentes basados en tu historial de productividad.
           </p>
 
+          {/* Provider Selector */}
           <div>
-            <label className="block text-sm text-zinc-400 mb-2">API Key de Gemini</label>
+            <label className="block text-sm text-zinc-400 mb-2">Proveedor</label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => { update('aiProvider', 'groq'); setKeyStatus('idle'); }}
+                className={`p-3 rounded-xl border text-sm font-semibold transition-all ${
+                  (settings.aiProvider ?? 'groq') === 'groq'
+                    ? 'border-purple-500 bg-purple-900/30 text-purple-300'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:border-zinc-600'
+                }`}
+              >
+                ⚡ Groq
+                <span className="block text-[10px] font-normal mt-0.5 text-green-400">100% Gratis</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { update('aiProvider', 'gemini'); setKeyStatus('idle'); }}
+                className={`p-3 rounded-xl border text-sm font-semibold transition-all ${
+                  settings.aiProvider === 'gemini'
+                    ? 'border-purple-500 bg-purple-900/30 text-purple-300'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:border-zinc-600'
+                }`}
+              >
+                🔮 Gemini
+                <span className="block text-[10px] font-normal mt-0.5 text-yellow-400">Free tier limitado</span>
+              </button>
+            </div>
+          </div>
+
+          {/* API Key */}
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">
+              API Key {(settings.aiProvider ?? 'groq') === 'groq' ? 'de Groq' : 'de Gemini'}
+            </label>
             <div className="relative">
               <input
                 type={showApiKey ? 'text' : 'password'}
-                value={settings.geminiApiKey ?? ''}
+                value={settings.aiApiKey ?? settings.geminiApiKey ?? ''}
                 onChange={(e) => {
-                  update('geminiApiKey', sanitizeApiKey(e.target.value));
+                  update('aiApiKey', sanitizeApiKey(e.target.value));
                   setKeyStatus('idle');
                 }}
-                placeholder="AIza..."
+                placeholder={(settings.aiProvider ?? 'groq') === 'groq' ? 'gsk_...' : 'AIza...'}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 pr-12 text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono text-sm"
               />
               <button
@@ -288,13 +323,23 @@ export function Settings() {
               </button>
             </div>
             <p className="text-xs text-zinc-500 mt-1">
-              Obtén tu key gratis en{' '}
-              <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
-                className="text-purple-400 underline hover:text-purple-300">Google AI Studio</a>
+              {(settings.aiProvider ?? 'groq') === 'groq' ? (
+                <>Crea tu key gratis en{' '}
+                  <a href="https://console.groq.com/keys" target="_blank" rel="noopener"
+                    className="text-purple-400 underline hover:text-purple-300">console.groq.com</a>
+                  {' '}(sin tarjeta de crédito)
+                </>
+              ) : (
+                <>Obtén tu key en{' '}
+                  <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
+                    className="text-purple-400 underline hover:text-purple-300">Google AI Studio</a>
+                </>
+              )}
             </p>
           </div>
 
-          {settings.geminiApiKey && settings.geminiApiKey.trim().length > 5 && (
+          {/* Validate Button */}
+          {(settings.aiApiKey ?? settings.geminiApiKey ?? '').trim().length > 5 && (
             <button
               type="button"
               disabled={validatingKey}
@@ -302,10 +347,11 @@ export function Settings() {
                 setValidatingKey(true);
                 setKeyStatus('idle');
                 try {
-                  const valid = await validateApiKey(settings.geminiApiKey!);
+                  const provider: AIProvider = settings.aiProvider ?? 'groq';
+                  const key = settings.aiApiKey ?? settings.geminiApiKey ?? '';
+                  const valid = await validateApiKey(provider, key);
                   setKeyStatus(valid ? 'valid' : 'invalid');
                   if (valid) {
-                    // Guardar automáticamente al validar con éxito
                     store.updateSettings(settings);
                   }
                 } catch (err) {
@@ -319,9 +365,9 @@ export function Settings() {
               {validatingKey ? (
                 <><Loader2 className="size-4 animate-spin" /> Validando...</>
               ) : keyStatus === 'valid' ? (
-                <span className="text-green-400">✓ API Key válida</span>
+                <span className="text-green-400">✓ Conexión exitosa</span>
               ) : keyStatus === 'invalid' ? (
-                <span className="text-red-400">✗ API Key inválida</span>
+                <span className="text-red-400">✗ Key inválida o error de conexión</span>
               ) : (
                 <><Brain className="size-4" /> Verificar conexión</>
               )}
@@ -331,7 +377,7 @@ export function Settings() {
           {store.isAIEnabled() && (
             <div className="bg-purple-900/30 border border-purple-800/40 rounded-xl p-3">
               <p className="text-xs text-purple-300">
-                🧠 IA activa. En el Planner verás el botón <strong>"Generar con IA"</strong> para crear horarios inteligentes.
+                🧠 IA activa con <strong>{(settings.aiProvider ?? 'groq') === 'groq' ? 'Groq (Llama 3.3)' : 'Google Gemini'}</strong>. En el Planner verás el botón <strong>"IA"</strong> para generar horarios inteligentes.
               </p>
             </div>
           )}

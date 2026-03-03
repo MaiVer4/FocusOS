@@ -7,7 +7,7 @@ import {
   smartAssignTasksToSlots,
 } from './learning-engine';
 import { generateAISchedule, getAIDailySummary, resetAIClient } from './ai-engine';
-import type { AIScheduleResult, AIDailySummary } from './ai-engine';
+import type { AIScheduleResult, AIDailySummary, AIProvider } from './ai-engine';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -906,10 +906,16 @@ class Store {
   }
 
   updateSettings(updates: Partial<UserSettings>): void {
+    // Migrar geminiApiKey legacy a aiApiKey
+    if (updates.geminiApiKey && !updates.aiApiKey) {
+      updates.aiApiKey = updates.geminiApiKey;
+      updates.aiProvider = updates.aiProvider ?? 'gemini';
+    }
     this.settings = { ...this.settings, ...updates };
     saveToStorage(STORAGE_KEYS.settings, this.settings);
-    // Si cambió la API key, resetear el cliente de IA
-    if (updates.geminiApiKey !== undefined) resetAIClient();
+    if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined || updates.geminiApiKey !== undefined) {
+      resetAIClient();
+    }
   }
 
   resetSettings(): void {
@@ -1007,7 +1013,15 @@ class Store {
 
   /** Verifica si la IA está configurada */
   isAIEnabled(): boolean {
-    return !!this.settings.geminiApiKey && this.settings.geminiApiKey.trim().length > 10;
+    const key = this.settings.aiApiKey ?? this.settings.geminiApiKey;
+    return !!key && key.trim().length > 10;
+  }
+
+  /** Obtiene el proveedor y key activos */
+  private getAIConfig(): { provider: AIProvider; apiKey: string } {
+    const key = this.settings.aiApiKey ?? this.settings.geminiApiKey ?? '';
+    const provider = this.settings.aiProvider ?? (this.settings.geminiApiKey ? 'gemini' : 'groq');
+    return { provider, apiKey: key };
   }
 
   /**
@@ -1079,15 +1093,17 @@ class Store {
    */
   async getAISummary(date: string): Promise<AIDailySummary> {
     if (!this.isAIEnabled()) {
-      throw new Error('API key de Gemini no configurada.');
+      throw new Error('API key de IA no configurada.');
     }
 
+    const { provider, apiKey } = this.getAIConfig();
     const blocks = this.getBlocks(date);
     const tasks = this.tasks.filter(t => t.status !== 'terminada');
     const recentMetrics = this.metrics.slice(-14);
 
     return getAIDailySummary(
-      this.settings.geminiApiKey!,
+      provider,
+      apiKey,
       date,
       blocks,
       tasks,
