@@ -103,7 +103,6 @@ const ALL_SLOTS: TimeSlot[] = [
 
 function timeToSlot(time: string): TimeSlot {
   const hour = parseInt(time.split(':')[0], 10);
-  if (hour < 6) return '06-08';
   if (hour < 8) return '06-08';
   if (hour < 10) return '08-10';
   if (hour < 12) return '10-12';
@@ -429,30 +428,6 @@ export function getProductivityScore(
 }
 
 /**
- * Sugiere la mejor franja horaria para un tipo de bloque dado.
- * Retorna la hora de inicio ideal (HH:mm).
- */
-export function suggestBestTime(
-  profile: LearnedProfile,
-  type: BlockType
-): string {
-  const slots = type === 'deep' ? profile.bestDeepSlots
-    : type === 'light' ? profile.bestLightSlots
-    : [];
-
-  if (slots.length === 0) return '19:30'; // default
-
-  // Convertir slot a hora de inicio
-  const slotToTime: Record<TimeSlot, string> = {
-    '06-08': '06:00', '08-10': '08:00', '10-12': '10:00',
-    '12-14': '12:00', '14-16': '14:00', '16-18': '16:00',
-    '18-20': '18:00', '20-22': '20:00', '22-00': '22:00',
-  };
-
-  return slotToTime[slots[0]] ?? '19:30';
-}
-
-/**
  * Calcula un bonus de urgencia basado en el perfil aprendido.
  * Si la categoría de la tarea tiene alta tasa de éxito, se prioriza menos
  * (el usuario es bueno en eso). Si tiene baja tasa de éxito, se prioriza más
@@ -480,24 +455,6 @@ export function getOptimalDuration(
   if (type === 'deep') return profile.optimalDeepDuration;
   if (type === 'light') return profile.optimalLightDuration;
   return 30; // exercise/rest default
-}
-
-/**
- * Ordena una lista de tareas considerando el perfil aprendido.
- * Prioriza tareas cuya categoría tiene bajo rendimiento histórico
- * (necesitan más trabajo) y las coloca en franjas de alto rendimiento.
- */
-export function rankTasksWithProfile(
-  tasks: Task[],
-  profile: LearnedProfile,
-  date: string,
-  baseUrgencyFn: (task: Task, date: string) => number
-): Task[] {
-  return [...tasks].sort((a, b) => {
-    const urgA = baseUrgencyFn(a, date) * getCategoryBonus(profile, a);
-    const urgB = baseUrgencyFn(b, date) * getCategoryBonus(profile, b);
-    return urgB - urgA;
-  });
 }
 
 /**

@@ -306,7 +306,7 @@ export function Settings() {
             <div className="relative">
               <input
                 type={showApiKey ? 'text' : 'password'}
-                value={settings.aiApiKey ?? settings.geminiApiKey ?? ''}
+                value={settings.aiApiKey ?? ''}
                 onChange={(e) => {
                   update('aiApiKey', sanitizeApiKey(e.target.value));
                   setKeyStatus('idle');
@@ -339,7 +339,7 @@ export function Settings() {
           </div>
 
           {/* Validate Button */}
-          {(settings.aiApiKey ?? settings.geminiApiKey ?? '').trim().length > 5 && (
+          {(settings.aiApiKey ?? '').trim().length > 5 && (
             <button
               type="button"
               disabled={validatingKey}
@@ -348,7 +348,7 @@ export function Settings() {
                 setKeyStatus('idle');
                 try {
                   const provider: AIProvider = settings.aiProvider ?? 'groq';
-                  const key = settings.aiApiKey ?? settings.geminiApiKey ?? '';
+                  const key = settings.aiApiKey ?? '';
                   const valid = await validateApiKey(provider, key);
                   setKeyStatus(valid ? 'valid' : 'invalid');
                   if (valid) {

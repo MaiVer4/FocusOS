@@ -381,7 +381,7 @@ export async function getAIDailySummary(
 
   const prompt = `Eres un coach de productividad. Analiza el día del estudiante.
 
-${buildContextPrompt(settings, profile, metrics)}
+${buildContextPrompt(settings, profile, metrics, undefined)}
 
 === RESULTADOS DEL DÍA ${date} ===
 Completados: ${completed.length} | Fallidos: ${failed.length} | Pendientes: ${pending.length}

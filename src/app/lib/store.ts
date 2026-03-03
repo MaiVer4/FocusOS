@@ -341,7 +341,7 @@ function calculateTaskUrgency(task: Task, referenceDate: string, profile?: Learn
  * La tarea se programa TODOS los días desde hoy hasta su fecha de entrega.
  * Solo se excluye si el día ya tiene un bloque con esa tarea asignada.
  */
-function shouldScheduleTaskOnDay(task: Task, date: string, _allBlocks: Block[]): boolean {
+function shouldScheduleTaskOnDay(task: Task, date: string): boolean {
   if (!task.dueDate || task.status === 'terminada' || task.status === 'aplazada') return false;
 
   const dueStr = task.dueDate.split('T')[0];
@@ -394,10 +394,21 @@ class Store {
 
   constructor() {
     this.migrateTaskStatuses();
+    this.migrateSettings();
     // Persist merged settings so new default fields get saved
     saveToStorage(STORAGE_KEYS.settings, this.settings);
     // Recalcular perfil de aprendizaje al iniciar
     this.refreshProfile();
+  }
+
+  /** Migra campos legacy de settings */
+  private migrateSettings(): void {
+    // geminiApiKey → aiApiKey
+    if (this.settings.geminiApiKey && !this.settings.aiApiKey) {
+      this.settings.aiApiKey = this.settings.geminiApiKey;
+      this.settings.aiProvider = this.settings.aiProvider ?? 'gemini';
+      delete this.settings.geminiApiKey;
+    }
   }
 
   /** Migra status antiguos (pending/in-progress/completed) a los nuevos */
@@ -483,7 +494,7 @@ class Store {
     const today = todayStr();
 
     // Solo programar si la tarea debe trabajarse hoy según su urgencia
-    if (!shouldScheduleTaskOnDay(task, today, this.blocks)) return;
+    if (!shouldScheduleTaskOnDay(task, today)) return;
 
     const existingBlocks = this.getBlocks(today);
 
@@ -694,7 +705,7 @@ class Store {
 
     // Tareas con fecha que deben trabajarse hoy según urgencia y dificultad
     const schedulable = activeTasks.filter(t =>
-      t.dueDate && shouldScheduleTaskOnDay(t, date, this.blocks)
+      t.dueDate && shouldScheduleTaskOnDay(t, date)
     );
 
     // Tareas sin fecha pero en progreso (repaso/personales activas)
@@ -1093,17 +1104,18 @@ class Store {
   }
 
   updateSettings(updates: Partial<UserSettings>): void {
-    // Migrar geminiApiKey legacy a aiApiKey
+    // Migrar geminiApiKey legacy → aiApiKey
     if (updates.geminiApiKey && !updates.aiApiKey) {
       updates.aiApiKey = updates.geminiApiKey;
       updates.aiProvider = updates.aiProvider ?? 'gemini';
+      delete updates.geminiApiKey;
     }
     this.settings = { ...this.settings, ...updates };
     // Guardar en localStorage
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(this.settings));
     // Subir inmediatamente a la nube (sin debounce) para evitar pérdida al refrescar
     cloudSync.uploadImmediate('settings', this.settings);
-    if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined || updates.geminiApiKey !== undefined) {
+    if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined) {
       resetAIClient();
     }
   }
@@ -1189,8 +1201,8 @@ class Store {
       // Bloques de días anteriores: conservar si son recientes (ayer)
       if (b.date > twoDaysAgoStr) return true;
 
-      // Más de 2 días: solo eliminar los ya terminados
-      return b.status === 'pending' || b.status === 'active';
+      // Más de 2 días: eliminar todos (ya no son relevantes para métricas ni aprendizaje)
+      return false;
     });
     const removed = before - this.blocks.length;
     if (removed > 0) {
@@ -1210,7 +1222,7 @@ class Store {
   /** Obtiene el proveedor y key activos */
   private getAIConfig(): { provider: AIProvider; apiKey: string } {
     const key = this.settings.aiApiKey ?? this.settings.geminiApiKey ?? '';
-    const provider = this.settings.aiProvider ?? (this.settings.geminiApiKey ? 'gemini' : 'groq');
+    const provider = this.settings.aiProvider ?? 'groq';
     return { provider, apiKey: key };
   }
 

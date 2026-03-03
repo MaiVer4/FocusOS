@@ -70,5 +70,6 @@ export interface UserSettings {
   socialMediaMaxMinutes: number;
   aiProvider?: 'groq' | 'gemini';  // Proveedor de IA (default: groq)
   aiApiKey?: string;               // API key del proveedor seleccionado
-  geminiApiKey?: string;           // Legacy — migrado a aiApiKey
+  /** @deprecated Usar aiApiKey. Se mantiene solo para migración de datos existentes. */
+  geminiApiKey?: string;
 }

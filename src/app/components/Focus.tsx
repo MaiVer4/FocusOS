@@ -64,7 +64,7 @@ export function Focus() {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [currentBlock?.id]);
 
   const handleComplete = () => {
     if (currentBlock) {
