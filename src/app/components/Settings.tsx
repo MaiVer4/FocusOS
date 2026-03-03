@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
-import { validateApiKey } from '../lib/ai-engine';
+import { validateApiKey, sanitizeApiKey } from '../lib/ai-engine';
 import { UserSettings } from '../lib/types';
 import { Save, Moon, Sun, Zap, Dumbbell, Smartphone, Bell, RotateCcw, Brain, Eye, EyeOff, Loader2 } from 'lucide-react';
 
@@ -273,7 +273,7 @@ export function Settings() {
                 type={showApiKey ? 'text' : 'password'}
                 value={settings.geminiApiKey ?? ''}
                 onChange={(e) => {
-                  update('geminiApiKey', e.target.value);
+                  update('geminiApiKey', sanitizeApiKey(e.target.value));
                   setKeyStatus('idle');
                 }}
                 placeholder="AIza..."

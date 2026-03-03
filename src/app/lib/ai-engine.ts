@@ -43,9 +43,15 @@ const AI_MODELS = ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'];
 
 let genAI: GoogleGenerativeAI | null = null;
 
+/** Elimina caracteres invisibles (zero-width spaces, BOM, etc.) de la API key */
+export function sanitizeApiKey(key: string): string {
+  // Eliminar todo lo que no sea ASCII imprimible
+  return key.replace(/[^\x20-\x7E]/g, '').trim();
+}
+
 function getClient(apiKey: string): GoogleGenerativeAI {
   if (!genAI) {
-    genAI = new GoogleGenerativeAI(apiKey);
+    genAI = new GoogleGenerativeAI(sanitizeApiKey(apiKey));
   }
   return genAI;
 }
@@ -347,7 +353,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
  */
 export async function validateApiKey(apiKey: string): Promise<boolean> {
   try {
-    const client = new GoogleGenerativeAI(apiKey);
+    const client = new GoogleGenerativeAI(sanitizeApiKey(apiKey));
     const text = await generateWithFallback(client, 'Di hola');
     return text.length > 0;
   } catch (err: any) {
