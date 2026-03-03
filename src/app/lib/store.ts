@@ -1,4 +1,4 @@
-import { Block, BlockType, BlockPriority, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
+import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
 import { addMinutesToTime, dateToStr, durationBetween, todayStr } from './helpers';
 import { cloudSync } from './cloud-sync';
 
@@ -92,6 +92,104 @@ function getTemplateForDay(dayOfWeek: number): TemplateBlock[] {
   if (dayOfWeek === 6) return SATURDAY_TEMPLATE;
   if (dayOfWeek === 0) return SUNDAY_TEMPLATE;
   return WEEKDAY_TEMPLATE;
+}
+
+// ─── Smart Task Scheduling ──────────────────────────────────────────────────
+
+/** Sesiones de trabajo por semana según dificultad de la tarea */
+const SESSIONS_PER_WEEK: Record<Difficulty, number> = {
+  high: 5,    // casi diario (lun–vie)
+  medium: 3,  // cada ~2 días
+  low: 1,     // una vez por semana
+};
+
+/**
+ * Calcula un puntaje de urgencia para una tarea.
+ * Mayor puntaje = más urgente = debe priorizarse.
+ *
+ * Factores:
+ * - Días restantes hasta la fecha de entrega
+ * - Dificultad (sesiones necesarias por semana)
+ * - Si es entregable (isDeliverable)
+ * - Si está vencida (overdue)
+ *
+ * Ejemplo: Tarea HIGH que se entrega en 2 días → urgencia ≈ 25
+ *          Tarea LOW que se entrega en 7 días → urgencia ≈ 1.4
+ */
+function calculateTaskUrgency(task: Task, referenceDate: string): number {
+  if (!task.dueDate || task.status === 'terminada') return -1;
+
+  const dueStr = task.dueDate.split('T')[0];
+  const ref = new Date(referenceDate + 'T12:00:00');
+  const due = new Date(dueStr + 'T12:00:00');
+  const daysLeft = Math.ceil((due.getTime() - ref.getTime()) / 86_400_000);
+
+  // Vencida → máxima urgencia (más días vencida = más urgente)
+  if (daysLeft < 0) return 1000 + Math.abs(daysLeft) * 10;
+
+  // Vence hoy
+  if (daysLeft === 0) return 500;
+
+  const sessionsPerWeek = SESSIONS_PER_WEEK[task.difficulty];
+
+  // urgency = sesiones necesarias / días restantes
+  let urgency = (sessionsPerWeek * 10) / Math.max(1, daysLeft);
+
+  // Bonus para entregables
+  if (task.isDeliverable) urgency *= 1.5;
+
+  // Bonus extra por dificultad alta cuando quedan pocos días
+  if (task.difficulty === 'high' && daysLeft <= 3) urgency *= 2;
+
+  return urgency;
+}
+
+/**
+ * Determina si una tarea debe programarse para trabajo en un día dado.
+ * Basado en la frecuencia derivada de la dificultad y la proximidad del deadline.
+ *
+ * Ejemplo:
+ *  - Tarea HIGH que se entrega en 3 días → trabajar cada día restante
+ *  - Tarea LOW que se entrega en 10 días → trabajar ~1 vez por semana
+ *  - Tarea MEDIUM que se entrega en 5 días → trabajar cada ~2 días
+ */
+function shouldScheduleTaskOnDay(task: Task, date: string, allBlocks: Block[]): boolean {
+  if (!task.dueDate || task.status === 'terminada' || task.status === 'aplazada') return false;
+
+  const dueStr = task.dueDate.split('T')[0];
+
+  // Tarea vencida → programar siempre
+  if (date > dueStr) return true;
+
+  const ref = new Date(date + 'T12:00:00');
+  const due = new Date(dueStr + 'T12:00:00');
+  const daysLeft = Math.ceil((due.getTime() - ref.getTime()) / 86_400_000);
+
+  // Vence hoy → siempre
+  if (daysLeft <= 0) return true;
+
+  const sessionsPerWeek = SESSIONS_PER_WEEK[task.difficulty];
+
+  // Si quedan ≤ sesiones por semana días → trabajar cada día restante
+  if (daysLeft <= sessionsPerWeek) return true;
+
+  // Calcular intervalo ideal entre sesiones (cada cuántos días trabajar)
+  const interval = Math.max(1, Math.floor(7 / sessionsPerWeek));
+
+  // Buscar la última vez que se trabajó en esta tarea (cualquier bloque asignado)
+  const taskBlocks = allBlocks
+    .filter(b => b.taskId === task.id && b.date < date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+
+  if (taskBlocks.length === 0) {
+    // Nunca se trabajó en esta tarea → programar hoy
+    return true;
+  }
+
+  const lastDate = new Date(taskBlocks[0].date + 'T12:00:00');
+  const daysSinceLast = Math.ceil((ref.getTime() - lastDate.getTime()) / 86_400_000);
+
+  return daysSinceLast >= interval;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
@@ -203,22 +301,27 @@ class Store {
   }
 
   /**
-   * Crea automáticamente un bloque para la tarea si:
-   * - La tarea tiene fecha (dueDate)
-   * - Ya existen bloques para ese día (la rutina fue generada)
-   * - La tarea no tiene ya un bloque asignado
+   * Crea automáticamente un bloque para la tarea HOY si:
+   * - La tarea tiene fecha de entrega (dueDate)
+   * - La urgencia requiere trabajar hoy (según dificultad y días restantes)
+   * - Ya existen bloques para hoy (la rutina fue generada)
+   * - La tarea no tiene ya un bloque asignado hoy
    * Luego reorganiza todos los bloques del día.
    */
   private autoAssignBlock(task: Task): void {
     if (!task.dueDate || task.status === 'terminada') return;
 
-    const blockDate = task.dueDate.split('T')[0];
-    const existingBlocks = this.getBlocks(blockDate);
+    const today = todayStr();
 
-    // Solo auto-crear si ya hay bloques ese día (la rutina fue generada)
+    // Solo programar si la tarea debe trabajarse hoy según su urgencia
+    if (!shouldScheduleTaskOnDay(task, today, this.blocks)) return;
+
+    const existingBlocks = this.getBlocks(today);
+
+    // Solo auto-crear si ya hay bloques hoy (la rutina fue generada)
     if (existingBlocks.length === 0) return;
 
-    // Verificar que no tenga ya un bloque
+    // Verificar que no tenga ya un bloque hoy
     if (existingBlocks.some(b => b.taskId === task.id)) return;
 
     const duration = task.difficulty === 'high' ? 90
@@ -226,7 +329,7 @@ class Store {
     const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
       : task.difficulty === 'medium' ? 'medium' : 'low';
 
-    const freeSlot = this.findNextFreeSlot(blockDate, duration, this.settings.arrivalTime);
+    const freeSlot = this.findNextFreeSlot(today, duration, this.settings.arrivalTime);
     const startTime = freeSlot ?? this.settings.arrivalTime;
     const endTime = addMinutesToTime(startTime, duration);
 
@@ -240,11 +343,11 @@ class Store {
       startTime,
       endTime,
       status: 'pending',
-      date: blockDate,
+      date: today,
       interruptions: 0,
     };
     this.addBlock(block);
-    this.reorganizeBlocks(blockDate);
+    this.reorganizeBlocks(today);
   }
 
   updateTask(id: string, updates: Partial<Task>): void {
@@ -263,29 +366,19 @@ class Store {
     );
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-    // Si cambió la fecha, mover el bloque al nuevo día
-    if (oldDate && newDate && oldDate !== newDate) {
-      const taskBlock = this.blocks.find(b => b.taskId === id && b.date === oldDate);
-      if (taskBlock) {
-        // Mover bloque al nuevo día
-        this.blocks = this.blocks.map(b =>
-          b.id === taskBlock.id ? { ...b, date: newDate } : b
-        );
-        saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-        this.reorganizeBlocks(oldDate);
-        this.reorganizeBlocks(newDate);
-      } else if (updatedTask) {
-        // No tenía bloque, intentar asignar en el nuevo día
-        this.autoAssignBlock(updatedTask);
-      }
+    // Si cambió la fecha de entrega, re-evaluar programación con nueva urgencia
+    if (oldDate && newDate && oldDate !== newDate && updatedTask) {
+      // Intentar asignar bloque hoy con la nueva urgencia
+      this.autoAssignBlock(updatedTask);
     } else if (newDate) {
-      // Misma fecha: si cambió dificultad, ajustar duración del bloque
+      // Si cambió dificultad, ajustar duración de bloques pendientes
       if (updates.difficulty && oldTask && updates.difficulty !== oldTask.difficulty) {
         const newDuration = updates.difficulty === 'high' ? 90
           : updates.difficulty === 'medium' ? 60 : 45;
         const newPriority = (updatedTask?.isDeliverable || updates.difficulty === 'high') ? 'high'
           : updates.difficulty === 'medium' ? 'medium' : 'low';
-        const taskBlock = this.blocks.find(b => b.taskId === id && b.date === newDate);
+        // Buscar cualquier bloque pendiente de esta tarea (ya no atado al dueDate)
+        const taskBlock = this.blocks.find(b => b.taskId === id && b.status === 'pending');
         if (taskBlock) {
           this.blocks = this.blocks.map(b =>
             b.id === taskBlock.id ? {
@@ -296,7 +389,7 @@ class Store {
             } : b
           );
           saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-          this.reorganizeBlocks(newDate);
+          this.reorganizeBlocks(taskBlock.date);
         }
       }
 
@@ -397,27 +490,48 @@ class Store {
   }
 
   /**
-   * Devuelve las tareas del día + tareas vencidas arrastradas,
-   * ordenadas: entregables primero, luego por dificultad desc.
+   * Devuelve las tareas que deben trabajarse en un día dado,
+   * ordenadas por urgencia dinámica (más urgente primero).
+   *
+   * Ya no depende solo de la fecha de entrega:
+   * - Dificultad determina frecuencia: HIGH=5/sem, MEDIUM=3/sem, LOW=1/sem
+   * - Deadline cercano + alta dificultad → prioridad máxima
+   * - Tareas vencidas siempre se incluyen
+   * - Tareas sin fecha en progreso también se incluyen
+   *
+   * Ejemplo: Hoy lunes, Tarea X (HIGH, entrega miércoles) tiene más urgencia
+   *          que Tarea Y (MEDIUM, entrega viernes) porque tiene menos días y más sesiones.
    */
   getTasksForDayWithCarryOver(date: string): Task[] {
-    const dateTasks = this.getTasksForDate(date);
-    const overdue = this.getOverdueTasks(date);
-    // Deduplicar por ID
+    const activeTasks = this.tasks.filter(t =>
+      t.status !== 'terminada' && t.status !== 'aplazada'
+    );
+
+    // Tareas con fecha que deben trabajarse hoy según urgencia y dificultad
+    const schedulable = activeTasks.filter(t =>
+      t.dueDate && shouldScheduleTaskOnDay(t, date, this.blocks)
+    );
+
+    // Tareas sin fecha pero en progreso (repaso/personales activas)
+    const inProgressNoDate = activeTasks.filter(t =>
+      !t.dueDate && (t.status === 'en-progreso' || t.status === 'en-progreso-aplazada')
+    );
+
+    // Deduplicar
     const seen = new Set<string>();
     const all: Task[] = [];
-    for (const t of [...overdue, ...dateTasks]) {
+    for (const t of [...schedulable, ...inProgressNoDate]) {
       if (!seen.has(t.id)) {
         seen.add(t.id);
         all.push(t);
       }
     }
-    // Orden: entregables > dificultad alta > media > baja
-    const diffOrder = { high: 0, medium: 1, low: 2 };
+
+    // Ordenar por urgencia (mayor primero)
     return all.sort((a, b) => {
-      if (a.isDeliverable && !b.isDeliverable) return -1;
-      if (!a.isDeliverable && b.isDeliverable) return 1;
-      return diffOrder[a.difficulty] - diffOrder[b.difficulty];
+      const ua = calculateTaskUrgency(a, date);
+      const ub = calculateTaskUrgency(b, date);
+      return ub - ua;
     });
   }
 
