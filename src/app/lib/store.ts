@@ -79,39 +79,52 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
 
   let c = wake; // cursor en minutos
 
-  // ═══ MAÑANA: wakeTime → scheduleStartTime ═══
-  const morningWindow = formalStart - wake;
+  // ═══ MAÑANA: SIEMPRE generar rutina desde wakeTime ═══
+  // La rutina matutina se genera siempre, incluso si wakeTime >= scheduleStartTime.
+  // Si no hay ventana matutina, la rutina ocurre y las formales empiezan después.
 
-  if (morningWindow >= 20) {
-    c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
-  }
-  if (morningWindow >= 50) {
-    c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
-  }
-  // Estudio ligero matutino si hay ≥ 60 min de ventana extra
-  if (morningWindow >= 110) {
-    const studyTime = Math.min(60, formalStart - c - 30); // reservar 30 min prep/transporte
-    if (studyTime >= 30) {
-      c = _push(blocks, c, studyTime, 'light', 'Estudio ligero', 'medium', true);
+  c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
+  c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
+
+  // Ventana extra antes de formales para estudio/preparación
+  const timeBeforeFormal = formalStart - c;
+
+  if (timeBeforeFormal >= 90) {
+    // Hay ≥90 min libres → estudio ligero + prepararse + transporte
+    const studyTime = Math.min(60, timeBeforeFormal - 30);
+    c = _push(blocks, c, studyTime, 'light', 'Estudio ligero', 'medium', true);
+    const prepTime = Math.min(15, formalStart - c);
+    if (prepTime >= 10) {
+      c = _push(blocks, c, prepTime, 'rest', 'Vestirse y prepararse', 'low');
     }
-  }
-  // Prepararse y transporte
-  if (morningWindow >= 75) {
-    const remaining = formalStart - c;
-    if (remaining >= 30) {
-      c = _push(blocks, c, 15, 'rest', 'Vestirse y prepararse', 'low');
-      c = _push(blocks, c, formalStart - c, 'rest', 'Transporte', 'low');
-    } else if (remaining >= 15) {
-      c = _push(blocks, c, remaining, 'rest', 'Prepararse', 'low');
+    const transportTime = formalStart - c;
+    if (transportTime >= 10) {
+      c = _push(blocks, c, transportTime, 'rest', 'Transporte', 'low');
     }
+  } else if (timeBeforeFormal >= 45) {
+    // Hay 45-89 min → prepararse + transporte
+    c = _push(blocks, c, 15, 'rest', 'Vestirse y prepararse', 'low');
+    const transportTime = formalStart - c;
+    if (transportTime >= 10) {
+      c = _push(blocks, c, transportTime, 'rest', 'Transporte', 'low');
+    }
+  } else if (timeBeforeFormal >= 15) {
+    // Hay 15-44 min → solo prepararse
+    c = _push(blocks, c, Math.min(timeBeforeFormal, 20), 'rest', 'Prepararse', 'low');
   }
+  // Si timeBeforeFormal < 15 (o negativo): el cursor ya está en/pasó la hora formal
+  // Las formales empezarán donde el cursor quedó
 
   // ═══ FORMAL: scheduleStartTime → scheduleEndTime ═══
-  blocks.push({
-    type: 'light', label: 'Actividades formales',
-    startTime: s.scheduleStartTime, endTime: s.scheduleEndTime,
-    priority: 'high',
-  });
+  // Usar max(cursor, formalStart) para evitar solapamiento con la rutina matutina
+  const actualFormalStart = Math.max(c, formalStart);
+  if (formalEnd > actualFormalStart) {
+    blocks.push({
+      type: 'light', label: 'Actividades formales',
+      startTime: _toTime(actualFormalStart), endTime: s.scheduleEndTime,
+      priority: 'high',
+    });
+  }
 
   // ═══ TRANSICIÓN: scheduleEndTime → arrivalTime ═══
   if (arrival > formalEnd) {
@@ -123,7 +136,7 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
   }
 
   // ═══ TARDE/NOCHE: arrivalTime → sleepTime ═══
-  c = arrival;
+  c = Math.max(arrival, formalEnd);
 
   // Cena (45 min o lo que quepa)
   const dinnerDur = Math.min(45, sleep - c - 60);
