@@ -450,6 +450,20 @@ class Store {
       this.settings.aiProvider = this.settings.aiProvider ?? 'gemini';
       delete this.settings.geminiApiKey;
     }
+
+    // Migrar horario SENA: corregir valores antiguos
+    // Si scheduleStartTime es anterior a 12:00, actualizar a 12:00
+    if (this.settings.scheduleStartTime < '12:00') {
+      this.settings.scheduleStartTime = '12:00';
+    }
+    // Si scheduleEndTime no es 18:00 (valor correcto SENA)
+    if (this.settings.scheduleEndTime !== '18:00') {
+      this.settings.scheduleEndTime = '18:00';
+    }
+    // Asegurar arrivalTime coherente (después de scheduleEndTime)
+    if (this.settings.arrivalTime <= this.settings.scheduleEndTime) {
+      this.settings.arrivalTime = '18:45';
+    }
   }
 
   /** Migra status antiguos (pending/in-progress/completed) a los nuevos */
