@@ -275,9 +275,10 @@ ${isWeekend
   ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
   : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA
 - ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
-- ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, bloques de estudio
+- ❌ PROHIBIDO crear bloques DEEP en la mañana (${settings.wakeTime} a ${settings.scheduleStartTime}) — los bloques profundos son SOLO en la noche
+- ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, solo estudio LIGERO (type:"light")
 - ✅ Bloque SENA: colocar UN SOLO bloque (type:"rest", label:"SENA") de ${settings.scheduleStartTime} a ${settings.scheduleEndTime}. SIN taskId.
-- ✅ Ventana TARDE/NOCHE: ${settings.arrivalTime} a ${settings.sleepTime} → cena, bloques profundos, ejercicio, descanso`
+- ✅ Ventana TARDE/NOCHE: ${settings.arrivalTime} a ${settings.sleepTime} → cena, bloques PROFUNDOS (deep), ejercicio, descanso`
 }
 
 REGLAS GENERALES:
@@ -330,6 +331,12 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
       // Rechazar bloques fuera del rango despertar-dormir
       if (start < wakeMin || end > sleepMin) {
         console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: fuera de horario ${settings.wakeTime}-${settings.sleepTime}`);
+        return false;
+      }
+
+      // Entre semana: rechazar bloques deep en la mañana (solo van en la noche)
+      if (!isWeekend && b.type === 'deep' && start < formalStartMin) {
+        console.warn(`[AI] Bloque deep "${b.label}" (${b.startTime}-${b.endTime}) descartado: bloques profundos solo en la noche`);
         return false;
       }
 

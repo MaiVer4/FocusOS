@@ -86,41 +86,23 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
   c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
   c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
 
-  // Ventana antes de formales: estudio y preparación
+  // Ventana antes de formales: solo estudio ligero (deep blocks van en la noche)
   const timeBeforeFormal = formalStart - c;
   const prepAndTransport = 30; // reservar mín. para vestirse (15) + transporte (15)
   const morningStudyWindow = timeBeforeFormal - prepAndTransport;
-  let morningDeepCount = 0;
 
-  if (morningStudyWindow >= deepDur + 10) {
-    // ═══ Ventana grande: bloques profundos de mañana ═══
-    while (morningDeepCount < deepMax) {
-      const remaining = formalStart - c - prepAndTransport;
-      if (remaining < deepDur) break;
-      c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${morningDeepCount + 1}`, 'high', true);
-      morningDeepCount++;
-      // Break entre bloques (si cabe otro deep después)
-      const afterBreak = formalStart - c - 10 - prepAndTransport;
-      if (afterBreak >= deepDur) {
-        c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
-      } else {
-        // No cabe otro deep; agregar descanso solo si queda para estudio ligero
-        if (formalStart - c - prepAndTransport >= 35) {
-          c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
-        }
-        break;
+  if (morningStudyWindow >= 30) {
+    // Estudio ligero en la mañana (máx 2 bloques con descanso)
+    const lightDur = Math.min(60, morningStudyWindow);
+    c = _push(blocks, c, lightDur, 'light', 'Estudio ligero', 'medium', true);
+    const remaining = formalStart - c - prepAndTransport;
+    if (remaining >= 40) {
+      c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
+      const lightDur2 = Math.min(50, formalStart - c - prepAndTransport);
+      if (lightDur2 >= 25) {
+        c = _push(blocks, c, lightDur2, 'light', 'Estudio ligero 2', 'medium', true);
       }
     }
-    // Tiempo extra entre último bloque y preparación → estudio ligero
-    const extraTime = formalStart - c - prepAndTransport;
-    if (extraTime >= 25) {
-      c = _push(blocks, c, Math.min(extraTime, 60), 'light', 'Estudio ligero', 'medium', true);
-    }
-  } else if (morningStudyWindow >= 30) {
-    // ═══ Ventana media: estudio ligero ═══
-    c = _push(blocks, c, Math.min(60, morningStudyWindow), 'light', 'Estudio ligero', 'medium', true);
-  } else if (timeBeforeFormal >= 15) {
-    // Ventana pequeña: solo prepararse
   }
 
   // Prepararse y transporte antes de formales
@@ -170,16 +152,14 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     c = _push(blocks, c, dinnerDur, 'rest', 'Llegada y cena', 'low');
   }
 
-  // Bloques profundos con descansos (descontando los colocados en la mañana)
+  // Bloques profundos con descansos (solo en la noche)
   const breakDur = 10;
-  const afternoonDeepMax = deepMax - morningDeepCount;
-  for (let i = 0; i < afternoonDeepMax; i++) {
+  for (let i = 0; i < deepMax; i++) {
     if (c + deepDur > sleep - 30) break; // reservar 30 min para cierre del día
-    const blockNum = morningDeepCount + i + 1;
-    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${blockNum}`, 'high', true);
+    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${i + 1}`, 'high', true);
 
     // Descanso entre bloques (no después del último)
-    if (i < afternoonDeepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
+    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
       c = _push(blocks, c, breakDur, 'rest', 'Descanso', 'low');
     }
   }
