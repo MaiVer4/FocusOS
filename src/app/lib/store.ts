@@ -146,50 +146,19 @@ function calculateTaskUrgency(task: Task, referenceDate: string): number {
 
 /**
  * Determina si una tarea debe programarse para trabajo en un día dado.
- * Basado en la frecuencia derivada de la dificultad y la proximidad del deadline.
- *
- * Ejemplo:
- *  - Tarea HIGH que se entrega en 3 días → trabajar cada día restante
- *  - Tarea LOW que se entrega en 10 días → trabajar ~1 vez por semana
- *  - Tarea MEDIUM que se entrega en 5 días → trabajar cada ~2 días
+ * La tarea se programa TODOS los días desde hoy hasta su fecha de entrega.
+ * Solo se excluye si el día ya tiene un bloque con esa tarea asignada.
  */
-function shouldScheduleTaskOnDay(task: Task, date: string, allBlocks: Block[]): boolean {
+function shouldScheduleTaskOnDay(task: Task, date: string, _allBlocks: Block[]): boolean {
   if (!task.dueDate || task.status === 'terminada' || task.status === 'aplazada') return false;
 
   const dueStr = task.dueDate.split('T')[0];
 
-  // Tarea vencida → programar siempre
+  // Tarea vencida → programar siempre (arrastrar)
   if (date > dueStr) return true;
 
-  const ref = new Date(date + 'T12:00:00');
-  const due = new Date(dueStr + 'T12:00:00');
-  const daysLeft = Math.ceil((due.getTime() - ref.getTime()) / 86_400_000);
-
-  // Vence hoy → siempre
-  if (daysLeft <= 0) return true;
-
-  const sessionsPerWeek = SESSIONS_PER_WEEK[task.difficulty];
-
-  // Si quedan ≤ sesiones por semana días → trabajar cada día restante
-  if (daysLeft <= sessionsPerWeek) return true;
-
-  // Calcular intervalo ideal entre sesiones (cada cuántos días trabajar)
-  const interval = Math.max(1, Math.floor(7 / sessionsPerWeek));
-
-  // Buscar la última vez que se trabajó en esta tarea (cualquier bloque asignado)
-  const taskBlocks = allBlocks
-    .filter(b => b.taskId === task.id && b.date < date)
-    .sort((a, b) => b.date.localeCompare(a.date));
-
-  if (taskBlocks.length === 0) {
-    // Nunca se trabajó en esta tarea → programar hoy
-    return true;
-  }
-
-  const lastDate = new Date(taskBlocks[0].date + 'T12:00:00');
-  const daysSinceLast = Math.ceil((ref.getTime() - lastDate.getTime()) / 86_400_000);
-
-  return daysSinceLast >= interval;
+  // Programar en cualquier día hasta la fecha de entrega (inclusive)
+  return date <= dueStr;
 }
 
 function loadFromStorage<T>(key: string, fallback: T): T {
