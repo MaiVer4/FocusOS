@@ -52,6 +52,37 @@ class CloudSync {
   private changeCallbacks: Array<() => void> = [];
   private status: CloudSyncStatus = 'disconnected';
   private statusCallbacks: Array<(status: CloudSyncStatus) => void> = [];
+  private pullInProgress = false;
+
+  constructor() {
+    this.installLifecycleHandlers();
+  }
+
+  // ── Lifecycle: visibilitychange + online ─────────────────────────────────
+
+  private installLifecycleHandlers(): void {
+    // Cuando la pestaña vuelve a primer plano: subir pendientes + bajar remotos
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+
+      if (this.active) {
+        // Flush uploads que pudieron quedar atascados por throttle de mobile
+        this.flushPending();
+        // Verificar si hay cambios remotos que onSnapshot pudo haber perdido
+        this.pullFromCloud();
+      } else if (!this.connecting) {
+        // Intentar reconectar
+        this.connect();
+      }
+    });
+
+    // Cuando vuelve la red, reconectar
+    window.addEventListener('online', () => {
+      if (!this.active && !this.connecting) {
+        this.connect();
+      }
+    });
+  }
 
   private loadMeta(): Partial<Record<Collection, number>> {
     try {
@@ -229,21 +260,28 @@ class CloudSync {
       clearTimeout(this.debounceTimers[collection]);
     }
 
-    this.debounceTimers[collection] = setTimeout(() => {
+    this.debounceTimers[collection] = setTimeout(async () => {
       if (!this.active) return; // se subirá en flushPending al conectar
-      this.doUpload(collection, this.pendingUploads[collection]);
-      delete this.pendingUploads[collection];
+      const data = this.pendingUploads[collection];
+      const ok = await this.doUpload(collection, data);
+      if (ok) {
+        delete this.pendingUploads[collection];
+      }
+      // Si falló, se queda en pendingUploads para el próximo flush
     }, DEBOUNCE_MS);
   }
 
-  private async doUpload(collection: string, data: unknown): Promise<void> {
+  /** Sube a Firestore. Devuelve true si tuvo éxito. */
+  private async doUpload(collection: string, data: unknown): Promise<boolean> {
     try {
       if (this.active) this.setStatus('syncing');
       await saveUserData(collection, data, DEVICE_ID);
+      if (this.active) this.setStatus('connected');
+      return true;
     } catch (e) {
       console.error(`[CloudSync] Error subiendo ${collection}:`, e);
-    } finally {
       if (this.active) this.setStatus('connected');
+      return false;
     }
   }
 
@@ -263,15 +301,55 @@ class CloudSync {
     }
   }
 
-  /** Sube todos los uploads pendientes acumulados antes de conectar */
+  /** Sube todos los uploads pendientes acumulados */
   private async flushPending(): Promise<void> {
     const entries = Object.entries(this.pendingUploads);
-    this.pendingUploads = {};
-    if (entries.length > 0 && this.active) this.setStatus('syncing');
+    if (entries.length === 0) return;
+    if (this.active) this.setStatus('syncing');
     for (const [collection, data] of entries) {
-      await this.doUpload(collection, data);
+      const ok = await this.doUpload(collection, data);
+      if (ok) {
+        // Solo borrar si se subió con éxito
+        if (this.pendingUploads[collection] === data) {
+          delete this.pendingUploads[collection];
+        }
+      }
     }
-    if (entries.length > 0 && this.active) this.setStatus('connected');
+    if (this.active) this.setStatus('connected');
+  }
+
+  /**
+   * Descarga cambios recientes desde Firestore que onSnapshot pudo haber perdido
+   * (ej: dispositivo en background, WebSocket caído, etc.)
+   */
+  private async pullFromCloud(): Promise<void> {
+    if (!this.active || this.pullInProgress) return;
+    this.pullInProgress = true;
+    let changed = false;
+
+    try {
+      for (const collection of COLLECTIONS) {
+        try {
+          const cloud = await loadUserDataWithMeta<unknown>(collection);
+          if (!cloud.exists || cloud.value === null || cloud.value === undefined) continue;
+
+          const localUpdatedAt = this.getLocalUpdatedAt(collection);
+          if (cloud.updatedAt > localUpdatedAt) {
+            const storageKey = STORAGE_KEYS[collection];
+            localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+            this.setLocalUpdatedAt(collection, cloud.updatedAt);
+            console.log(`[CloudSync] 🔄 Pull remoto: ${collection} (${cloud.updatedAt} > ${localUpdatedAt})`);
+            changed = true;
+          }
+        } catch (e) {
+          console.error(`[CloudSync] Error pull ${collection}:`, e);
+        }
+      }
+
+      if (changed) this.notifyRemoteChange();
+    } finally {
+      this.pullInProgress = false;
+    }
   }
 
   // ── Sync inicial ───────────────────────────────────────────────────────
