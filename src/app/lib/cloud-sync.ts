@@ -56,8 +56,59 @@ class CloudSync {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly POLL_INTERVAL_MS = 3_000;
 
+  /** Funciones clave para cada colección que es un array mergeable */
+  private static readonly ARRAY_KEY_FN: Record<string, (item: any) => string> = {
+    tasks: (item) => item.id,
+    blocks: (item) => item.id,
+    metrics: (item) => item.date,
+  };
+
+  /** IDs eliminados localmente, pendientes de propagar a la nube */
+  private localDeletions: Record<string, Set<string>> = {};
+
   constructor() {
     this.installLifecycleHandlers();
+  }
+
+  // ── Merge helpers ───────────────────────────────────────────────────────
+
+  /** Registra una eliminación local para que el merge no resucite el item */
+  trackDeletion(collection: string, id: string): void {
+    if (!this.localDeletions[collection]) this.localDeletions[collection] = new Set();
+    this.localDeletions[collection].add(id);
+  }
+
+  /** Registra múltiples eliminaciones locales */
+  trackDeletions(collection: string, ids: string[]): void {
+    if (!this.localDeletions[collection]) this.localDeletions[collection] = new Set();
+    for (const id of ids) this.localDeletions[collection].add(id);
+  }
+
+  /**
+   * Merge dos arrays por clave única.
+   * - `primary` siempre gana para items que existen en ambos.
+   * - Items solo en `secondary` se agregan (salvo los de `deletions`).
+   */
+  private mergeByKey(
+    primary: unknown[],
+    secondary: unknown[],
+    keyFn: (item: any) => string,
+    deletions?: Set<string>,
+  ): unknown[] {
+    const primaryKeys = new Set(primary.map(keyFn));
+    const merged = [...primary];
+    for (const item of secondary) {
+      const key = keyFn(item);
+      if (!primaryKeys.has(key) && !deletions?.has(key)) {
+        merged.push(item);
+      }
+    }
+    return merged;
+  }
+
+  /** ¿Hay cambios locales pendientes de subir para esta colección? */
+  private hasPendingChanges(collection: string): boolean {
+    return !!(this.pendingUploads[collection] || this.debounceTimers[collection]);
   }
 
   // ── Lifecycle: visibilitychange + online ─────────────────────────────────
@@ -306,11 +357,45 @@ class CloudSync {
     }, DEBOUNCE_MS);
   }
 
-  /** Sube a Firestore. Devuelve true si tuvo éxito. */
+  /**
+   * Sube a Firestore con merge: antes de escribir, lee la nube y
+   * agrega items remotos que no existan en local (adiciones de otro dispositivo).
+   * Respeta localDeletions para no resucitar items eliminados localmente.
+   */
   private async doUpload(collection: string, data: unknown): Promise<boolean> {
     try {
       if (this.active) this.setStatus('syncing');
-      await saveUserData(collection, data, DEVICE_ID);
+
+      let dataToUpload = data;
+      const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+
+      // Para colecciones array, merge con la nube para preservar adiciones remotas
+      if (keyFn && Array.isArray(data)) {
+        try {
+          const cloud = await loadUserDataWithMeta<unknown[]>(collection);
+          if (cloud.exists && Array.isArray(cloud.value) && cloud.value.length > 0) {
+            const deletions = this.localDeletions[collection];
+            const merged = this.mergeByKey(data, cloud.value, keyFn, deletions);
+            if (merged.length !== data.length) {
+              dataToUpload = merged;
+              // Actualizar localStorage con el resultado mergeado
+              const storageKey = STORAGE_KEYS[collection as Collection];
+              if (storageKey) {
+                localStorage.setItem(storageKey, JSON.stringify(merged));
+                this.notifyRemoteChange();
+              }
+            }
+          }
+        } catch {
+          // Si falla la lectura previa, subir local tal cual
+        }
+      }
+
+      await saveUserData(collection, dataToUpload, DEVICE_ID);
+
+      // Limpiar deletions después de upload exitoso
+      delete this.localDeletions[collection];
+
       if (this.active) this.setStatus('connected');
       return true;
     } catch (e) {
@@ -371,7 +456,22 @@ class CloudSync {
           const localUpdatedAt = this.getLocalUpdatedAt(collection);
           if (cloud.updatedAt > localUpdatedAt) {
             const storageKey = STORAGE_KEYS[collection];
-            localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+            const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+            let finalData = cloud.value;
+
+            // Si tenemos cambios locales pendientes, merge para no perderlos
+            if (keyFn && Array.isArray(cloud.value) && this.hasPendingChanges(collection)) {
+              try {
+                const localRaw = localStorage.getItem(storageKey);
+                const localData = localRaw ? JSON.parse(localRaw) : null;
+                if (Array.isArray(localData)) {
+                  const deletions = this.localDeletions[collection];
+                  finalData = this.mergeByKey(cloud.value as any[], localData, keyFn, deletions);
+                }
+              } catch { /* ignore parse errors */ }
+            }
+
+            localStorage.setItem(storageKey, JSON.stringify(finalData));
             this.setLocalUpdatedAt(collection, cloud.updatedAt);
             console.log(`[CloudSync] 🔄 Pull remoto: ${collection} (${cloud.updatedAt} > ${localUpdatedAt})`);
             changed = true;
@@ -447,15 +547,32 @@ class CloudSync {
           this.setLocalUpdatedAt(collection, Date.now());
           console.log(`[CloudSync] ${collection}: local tiene datos, nube vacía → subiendo local`);
         } else {
-          // Ambos lados tienen datos reales: elegir el más reciente.
-          if (localUpdatedAt > cloudUpdatedAt) {
-            await saveUserData(collection, localData, DEVICE_ID);
+          // Ambos lados tienen datos reales → MERGE por ID
+          const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+          if (keyFn && Array.isArray(cloudData) && Array.isArray(localData)) {
+            // Nube es primary (source of truth), local aporta adiciones
+            const merged = this.mergeByKey(cloudData, localData, keyFn);
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+            const hasLocalOnly = merged.length > cloudData.length;
+            if (hasLocalOnly) {
+              // Subir el merge para que el otro dispositivo reciba las adiciones locales
+              await saveUserData(collection, merged, DEVICE_ID);
+              console.log(`[CloudSync] ${collection}: merged (${cloudData.length} nube + ${merged.length - cloudData.length} local)`);
+            } else {
+              console.log(`[CloudSync] ${collection}: nube al día (${cloudData.length} items)`);
+            }
             this.setLocalUpdatedAt(collection, Date.now());
-            console.log(`[CloudSync] ${collection}: local más reciente (${localUpdatedAt} > ${cloudUpdatedAt})`);
           } else {
-            localStorage.setItem(storageKey, JSON.stringify(cloudData));
-            this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
-            console.log(`[CloudSync] ${collection}: nube más reciente (${cloudUpdatedAt} >= ${localUpdatedAt})`);
+            // No-array (settings, etc.): elegir el más reciente
+            if (localUpdatedAt > cloudUpdatedAt) {
+              await saveUserData(collection, localData, DEVICE_ID);
+              this.setLocalUpdatedAt(collection, Date.now());
+              console.log(`[CloudSync] ${collection}: local más reciente (${localUpdatedAt} > ${cloudUpdatedAt})`);
+            } else {
+              localStorage.setItem(storageKey, JSON.stringify(cloudData));
+              this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
+              console.log(`[CloudSync] ${collection}: nube más reciente (${cloudUpdatedAt} >= ${localUpdatedAt})`);
+            }
           }
         }
       } catch (e) {
@@ -483,7 +600,23 @@ class CloudSync {
           if (data !== null && data !== undefined) {
             try {
               if (this.active) this.setStatus('syncing');
-              localStorage.setItem(storageKey, JSON.stringify(data));
+
+              let finalData = data;
+              const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+
+              // Si tenemos cambios locales pendientes, merge para preservarlos
+              if (keyFn && Array.isArray(data) && this.hasPendingChanges(collection)) {
+                try {
+                  const localRaw = localStorage.getItem(storageKey);
+                  const localData = localRaw ? JSON.parse(localRaw) : null;
+                  if (Array.isArray(localData)) {
+                    const deletions = this.localDeletions[collection];
+                    finalData = this.mergeByKey(data as any[], localData, keyFn, deletions);
+                  }
+                } catch { /* ignore */ }
+              }
+
+              localStorage.setItem(storageKey, JSON.stringify(finalData));
               this.setLocalUpdatedAt(collection, updatedAt || Date.now());
               console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
               this.notifyRemoteChange();

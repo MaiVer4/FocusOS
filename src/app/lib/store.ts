@@ -663,6 +663,7 @@ class Store {
 
   deleteTask(id: string): void {
     this.batch(() => {
+      cloudSync.trackDeletion('tasks', id);
       const affectedDates = new Set(
         this.blocks.filter(b => b.taskId === id).map(b => b.date)
       );
@@ -1133,6 +1134,7 @@ class Store {
 
   deleteBlock(id: string): void {
     this.batch(() => {
+      cloudSync.trackDeletion('blocks', id);
       const block = this.blocks.find(b => b.id === id);
       this.blocks = this.blocks.filter(b => b.id !== id);
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
@@ -1144,6 +1146,8 @@ class Store {
   }
 
   deleteAllBlocksForDate(date: string): void {
+    const blocksToDelete = this.blocks.filter(b => b.date === date);
+    cloudSync.trackDeletions('blocks', blocksToDelete.map(b => b.id));
     this.blocks = this.blocks.filter(b => b.date !== date);
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
     this.recalcDailyMetrics(date);
@@ -1151,6 +1155,7 @@ class Store {
 
   deleteAllTasks(): void {
     this.batch(() => {
+      cloudSync.trackDeletions('tasks', this.tasks.map(t => t.id));
       const affectedDates = new Set(
         this.blocks.filter(b => b.taskId).map(b => b.date)
       );
@@ -1511,6 +1516,9 @@ class Store {
   }
 
   clearAll(): void {
+    cloudSync.trackDeletions('tasks', this.tasks.map(t => t.id));
+    cloudSync.trackDeletions('blocks', this.blocks.map(b => b.id));
+    cloudSync.trackDeletions('metrics', this.metrics.map(m => m.date));
     this.tasks = [];
     this.blocks = [];
     this.metrics = [];
