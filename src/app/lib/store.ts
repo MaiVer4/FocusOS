@@ -474,7 +474,8 @@ class Store {
   // ─── Cloud Sync ────────────────────────────────────────────────────────────
 
   private listeners: Array<() => void> = [];
-  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  private notifyPending = false;
+  private batchDepth = 0;
 
   /** Suscribe a cambios en el store (para refresco automático de UI) */
   subscribe(fn: () => void): () => void {
@@ -487,15 +488,39 @@ class Store {
   }
 
   /**
-   * Programa una notificación a los listeners con microdebounce.
-   * Agrupa múltiples saveToStorage consecutivos en un solo re-render.
+   * Agrupa múltiples mutaciones en una sola notificación.
+   * Usar: store.batch(() => { ...varias operaciones... });
+   */
+  batch(fn: () => void): void {
+    this.batchDepth++;
+    try {
+      fn();
+    } finally {
+      this.batchDepth--;
+      if (this.batchDepth === 0 && this.notifyPending) {
+        this.notifyPending = false;
+        this.notifyListeners();
+      }
+    }
+  }
+
+  /**
+   * Notifica a los listeners inmediatamente usando microtask.
+   * Si estamos dentro de un batch, difiere hasta el final.
    */
   scheduleNotify(): void {
-    if (this.notifyTimer) return;
-    this.notifyTimer = setTimeout(() => {
-      this.notifyTimer = null;
-      this.notifyListeners();
-    }, 16); // ~1 frame (16ms)
+    if (this.batchDepth > 0) {
+      this.notifyPending = true;
+      return;
+    }
+    if (this.notifyPending) return;
+    this.notifyPending = true;
+    queueMicrotask(() => {
+      if (this.notifyPending) {
+        this.notifyPending = false;
+        this.notifyListeners();
+      }
+    });
   }
 
   /** Recarga datos desde localStorage (usado cuando cloud sync actualiza localStorage) */
@@ -585,6 +610,7 @@ class Store {
   }
 
   updateTask(id: string, updates: Partial<Task>): void {
+    this.batch(() => {
     const oldTask = this.tasks.find(t => t.id === id);
     const oldDate = oldTask?.dueDate?.split('T')[0];
 
@@ -602,16 +628,13 @@ class Store {
 
     // Si cambió la fecha de entrega, re-evaluar programación con nueva urgencia
     if (oldDate && newDate && oldDate !== newDate && updatedTask) {
-      // Intentar asignar bloque hoy con la nueva urgencia
       this.autoAssignBlock(updatedTask);
     } else if (newDate) {
-      // Si cambió dificultad, ajustar duración de bloques pendientes
       if (updates.difficulty && oldTask && updates.difficulty !== oldTask.difficulty) {
         const newDuration = updates.difficulty === 'high' ? 90
           : updates.difficulty === 'medium' ? 60 : 45;
         const newPriority = (updatedTask?.isDeliverable || updates.difficulty === 'high') ? 'high'
           : updates.difficulty === 'medium' ? 'medium' : 'low';
-        // Buscar cualquier bloque pendiente de esta tarea (ya no atado al dueDate)
         const taskBlock = this.blocks.find(b => b.taskId === id && b.status === 'pending');
         if (taskBlock) {
           this.blocks = this.blocks.map(b =>
@@ -627,38 +650,36 @@ class Store {
         }
       }
 
-      // Si no tenía bloque, intentar asignar
       if (updatedTask && !this.blocks.some(b => b.taskId === id)) {
         this.autoAssignBlock(updatedTask);
       }
     }
 
-    // Si se marcó como terminada, reorganizar
     if (updates.status === 'terminada' && newDate) {
       this.reorganizeBlocks(newDate);
     }
+    });
   }
 
   deleteTask(id: string): void {
-    // Encontrar las fechas afectadas antes de eliminar
-    const affectedDates = new Set(
-      this.blocks.filter(b => b.taskId === id).map(b => b.date)
-    );
+    this.batch(() => {
+      const affectedDates = new Set(
+        this.blocks.filter(b => b.taskId === id).map(b => b.date)
+      );
 
-    this.tasks = this.tasks.filter(t => t.id !== id);
-    saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+      this.tasks = this.tasks.filter(t => t.id !== id);
+      saveToStorage(STORAGE_KEYS.tasks, this.tasks);
 
-    // Desvincular la tarea de sus bloques
-    this.blocks = this.blocks.map(b =>
-      b.taskId === id ? { ...b, taskId: undefined, task: undefined } : b
-    );
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+      this.blocks = this.blocks.map(b =>
+        b.taskId === id ? { ...b, taskId: undefined, task: undefined } : b
+      );
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-    // Reasignar tareas sin bloque y reorganizar para cada día afectado
-    for (const date of affectedDates) {
-      this.assignUnblockedTasks(date);
-      this.reorganizeBlocks(date);
-    }
+      for (const date of affectedDates) {
+        this.assignUnblockedTasks(date);
+        this.reorganizeBlocks(date);
+      }
+    });
   }
 
   /**
@@ -1090,32 +1111,36 @@ class Store {
   }
 
   updateBlock(id: string, updates: Partial<Block>): void {
-    this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates } : b);
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    this.batch(() => {
+      this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates } : b);
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-    const block = this.blocks.find(b => b.id === id);
-    if (block) {
-      this.recalcDailyMetrics(block.date);
-      // Reorganizar si se editaron horarios
-      if (updates.startTime !== undefined || updates.endTime !== undefined || updates.duration !== undefined) {
-        this.reorganizeBlocks(block.date, id);
+      const block = this.blocks.find(b => b.id === id);
+      if (block) {
+        this.recalcDailyMetrics(block.date);
+        // Reorganizar si se editaron horarios
+        if (updates.startTime !== undefined || updates.endTime !== undefined || updates.duration !== undefined) {
+          this.reorganizeBlocks(block.date, id);
+        }
       }
-    }
 
-    // Refrescar perfil cuando un bloque se completa o falla
-    if (updates.status === 'completed' || updates.status === 'failed') {
-      this.refreshProfile();
-    }
+      // Refrescar perfil cuando un bloque se completa o falla
+      if (updates.status === 'completed' || updates.status === 'failed') {
+        this.refreshProfile();
+      }
+    });
   }
 
   deleteBlock(id: string): void {
-    const block = this.blocks.find(b => b.id === id);
-    this.blocks = this.blocks.filter(b => b.id !== id);
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-    if (block?.date) {
-      this.recalcDailyMetrics(block.date);
-      this.reorganizeBlocks(block.date);
-    }
+    this.batch(() => {
+      const block = this.blocks.find(b => b.id === id);
+      this.blocks = this.blocks.filter(b => b.id !== id);
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+      if (block?.date) {
+        this.recalcDailyMetrics(block.date);
+        this.reorganizeBlocks(block.date);
+      }
+    });
   }
 
   deleteAllBlocksForDate(date: string): void {
@@ -1125,23 +1150,22 @@ class Store {
   }
 
   deleteAllTasks(): void {
-    // Obtener fechas afectadas
-    const affectedDates = new Set(
-      this.blocks.filter(b => b.taskId).map(b => b.date)
-    );
+    this.batch(() => {
+      const affectedDates = new Set(
+        this.blocks.filter(b => b.taskId).map(b => b.date)
+      );
 
-    this.tasks = [];
-    saveToStorage(STORAGE_KEYS.tasks, this.tasks);
-    // Remove task references from all blocks
-    this.blocks = this.blocks.map(b =>
-      b.taskId ? { ...b, taskId: undefined, task: undefined } : b
-    );
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+      this.tasks = [];
+      saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+      this.blocks = this.blocks.map(b =>
+        b.taskId ? { ...b, taskId: undefined, task: undefined } : b
+      );
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-    // Reorganizar cada día afectado
-    for (const date of affectedDates) {
-      this.reorganizeBlocks(date);
-    }
+      for (const date of affectedDates) {
+        this.reorganizeBlocks(date);
+      }
+    });
   }
 
   // ─── Metrics ───────────────────────────────────────────────────────────────
