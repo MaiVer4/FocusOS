@@ -13,6 +13,7 @@ import {
   signInWithGoogleToken,
   saveUserData,
   loadUserDataWithMeta,
+  loadUserDataFromServer,
   onUserDataChange,
   getFirebaseUser,
   auth,
@@ -372,7 +373,7 @@ class CloudSync {
       // Para colecciones array, merge con la nube para preservar adiciones remotas
       if (keyFn && Array.isArray(data)) {
         try {
-          const cloud = await loadUserDataWithMeta<unknown[]>(collection);
+          const cloud = await loadUserDataFromServer<unknown[]>(collection);
           if (cloud.exists && Array.isArray(cloud.value) && cloud.value.length > 0) {
             const deletions = this.localDeletions[collection];
             const merged = this.mergeByKey(data, cloud.value, keyFn, deletions);
@@ -450,7 +451,8 @@ class CloudSync {
     try {
       for (const collection of COLLECTIONS) {
         try {
-          const cloud = await loadUserDataWithMeta<unknown>(collection);
+          // Forzar lectura del SERVIDOR (getDocFromServer) para no leer caché obsoleto
+          const cloud = await loadUserDataFromServer<unknown>(collection);
           if (!cloud.exists || cloud.value === null || cloud.value === undefined) continue;
 
           const localUpdatedAt = this.getLocalUpdatedAt(collection);

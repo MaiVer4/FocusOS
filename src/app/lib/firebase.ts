@@ -16,6 +16,7 @@ import {
   doc,
   setDoc,
   getDoc,
+  getDocFromServer,
   onSnapshot,
   Unsubscribe,
 } from 'firebase/firestore';
@@ -175,6 +176,26 @@ export async function loadUserDataWithMeta<T>(
   if (!user) return { exists: false, value: null, updatedAt: 0 };
   const ref = doc(db, 'users', user.uid, 'data', collection);
   const snap = await getDoc(ref);
+  if (!snap.exists()) return { exists: false, value: null, updatedAt: 0 };
+  const data = snap.data();
+  return {
+    exists: true,
+    value: (data.value as T) ?? null,
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0,
+  };
+}
+
+/**
+ * Carga datos + metadata directamente del SERVIDOR, ignorando caché local.
+ * Usar cuando se necesita detectar cambios que onSnapshot pudo haber perdido.
+ */
+export async function loadUserDataFromServer<T>(
+  collection: string,
+): Promise<{ exists: boolean; value: T | null; updatedAt: number }> {
+  const user = getActiveUser();
+  if (!user) return { exists: false, value: null, updatedAt: 0 };
+  const ref = doc(db, 'users', user.uid, 'data', collection);
+  const snap = await getDocFromServer(ref);
   if (!snap.exists()) return { exists: false, value: null, updatedAt: 0 };
   const data = snap.data();
   return {
