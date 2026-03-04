@@ -15,15 +15,11 @@ export function Metrics() {
       const start = new Date();
       start.setDate(today.getDate() - (period === 'week' ? 7 : 30));
 
-      // Build metrics by recalculating from stored blocks for each day in the range
-      const generated: DailyMetrics[] = [];
-      for (let d = new Date(start); d <= today; d.setDate(d.getDate() + 1)) {
-        const dateStr = dateToStr(d);
-        // Trigger recalculation so data is always fresh
-        store.recalcDailyMetrics(dateStr);
-        const m = store.getMetricsForDate(dateStr);
-        if (m) generated.push(m);
-      }
+      const startStr = dateToStr(start);
+      const todayString = dateToStr(today);
+
+      // Read already-computed metrics for the date range
+      const generated = store.getMetrics(startStr, todayString);
 
       setMetrics(generated);
 
