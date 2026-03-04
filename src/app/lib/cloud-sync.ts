@@ -53,6 +53,8 @@ class CloudSync {
   private status: CloudSyncStatus = 'disconnected';
   private statusCallbacks: Array<(status: CloudSyncStatus) => void> = [];
   private pullInProgress = false;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly POLL_INTERVAL_MS = 3_000;
 
   constructor() {
     this.installLifecycleHandlers();
@@ -61,18 +63,21 @@ class CloudSync {
   // ── Lifecycle: visibilitychange + online ─────────────────────────────────
 
   private installLifecycleHandlers(): void {
-    // Cuando la pestaña vuelve a primer plano: subir pendientes + bajar remotos
+    // Cuando la pestaña cambia de visibilidad
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') return;
-
-      if (this.active) {
-        // Flush uploads que pudieron quedar atascados por throttle de mobile
-        this.flushPending();
-        // Verificar si hay cambios remotos que onSnapshot pudo haber perdido
-        this.pullFromCloud();
-      } else if (!this.connecting) {
-        // Intentar reconectar
-        this.connect();
+      if (document.visibilityState === 'visible') {
+        if (this.active) {
+          // Flush uploads que pudieron quedar atascados por throttle de mobile
+          this.flushPending();
+          // Pull inmediato + reanudar polling
+          this.pullFromCloud();
+          this.startPolling();
+        } else if (!this.connecting) {
+          this.connect();
+        }
+      } else {
+        // Pestaña oculta → pausar polling para ahorrar batería
+        this.stopPolling();
       }
     });
 
@@ -80,8 +85,34 @@ class CloudSync {
     window.addEventListener('online', () => {
       if (!this.active && !this.connecting) {
         this.connect();
+      } else if (this.active) {
+        // Red de vuelta → pull inmediato + reanudar polling
+        this.pullFromCloud();
+        this.startPolling();
       }
     });
+  }
+
+  // ── Polling periódico ─────────────────────────────────────────────────
+
+  private startPolling(): void {
+    // No duplicar timers
+    if (this.pollTimer) return;
+    this.pollTimer = setInterval(() => {
+      // Solo si seguimos activos y la página es visible
+      if (!this.active || document.visibilityState !== 'visible') {
+        this.stopPolling();
+        return;
+      }
+      this.pullFromCloud();
+    }, CloudSync.POLL_INTERVAL_MS);
+  }
+
+  private stopPolling(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
   }
 
   private loadMeta(): Partial<Record<Collection, number>> {
@@ -222,6 +253,10 @@ class CloudSync {
       this.active = true;
       this.connecting = false;
       this.setStatus('connected');
+
+      // Iniciar polling periódico para atrapar cambios que onSnapshot pierda
+      this.startPolling();
+
       console.log('[CloudSync] ✅ Conectado (device:', DEVICE_ID, ')');
       return true;
     } catch (e) {
