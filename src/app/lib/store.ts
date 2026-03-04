@@ -395,12 +395,17 @@ const CLOUD_COLLECTIONS: Record<string, string> = {
   [STORAGE_KEYS.profile]: 'profile',
 };
 
+/** Referencia al store para notificar cambios desde saveToStorage */
+let _storeInstance: Store | null = null;
+
 function saveToStorage<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
     // Subir a Firebase Cloud
     const collection = CLOUD_COLLECTIONS[key];
     if (collection) cloudSync.uploadDebounced(collection, value);
+    // Notificar al store para que actualice la UI
+    _storeInstance?.scheduleNotify();
   } catch (e) {
     console.error(`Error saving ${key} to localStorage:`, e);
   }
@@ -414,6 +419,7 @@ class Store {
   private profile: LearnedProfile = loadFromStorage<LearnedProfile>(STORAGE_KEYS.profile, null as any);
 
   constructor() {
+    _storeInstance = this;
     this.migrateTaskStatuses();
     this.migrateSettings();
     // Persist merged settings so new default fields get saved
@@ -468,8 +474,9 @@ class Store {
   // ─── Cloud Sync ────────────────────────────────────────────────────────────
 
   private listeners: Array<() => void> = [];
+  private notifyTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Suscribe a cambios en el store (para refresco desde sync remoto) */
+  /** Suscribe a cambios en el store (para refresco automático de UI) */
   subscribe(fn: () => void): () => void {
     this.listeners.push(fn);
     return () => { this.listeners = this.listeners.filter(l => l !== fn); };
@@ -477,6 +484,18 @@ class Store {
 
   private notifyListeners(): void {
     this.listeners.forEach(fn => fn());
+  }
+
+  /**
+   * Programa una notificación a los listeners con microdebounce.
+   * Agrupa múltiples saveToStorage consecutivos en un solo re-render.
+   */
+  scheduleNotify(): void {
+    if (this.notifyTimer) return;
+    this.notifyTimer = setTimeout(() => {
+      this.notifyTimer = null;
+      this.notifyListeners();
+    }, 16); // ~1 frame (16ms)
   }
 
   /** Recarga datos desde localStorage (usado cuando cloud sync actualiza localStorage) */
