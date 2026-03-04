@@ -11,6 +11,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Block, BlockType, Task, UserSettings, DailyMetrics } from './types';
+import { isRoutineLabel } from './helpers';
 import { LearnedProfile } from './learning-engine';
 
 // ─── Tipos ───────────────────────────────────────────────────────────────────
@@ -53,9 +54,11 @@ export function sanitizeApiKey(key: string): string {
 }
 
 let _geminiClient: GoogleGenerativeAI | null = null;
+let _geminiClientKey: string | null = null;
 
 export function resetAIClient(): void {
   _geminiClient = null;
+  _geminiClientKey = null;
 }
 
 // ─── Groq (OpenAI-compatible REST) ───────────────────────────────────────────
@@ -111,7 +114,10 @@ async function groqGenerate(apiKey: string, prompt: string): Promise<string> {
 
 async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
   const key = sanitizeApiKey(apiKey);
-  if (!_geminiClient) _geminiClient = new GoogleGenerativeAI(key);
+  if (!_geminiClient || _geminiClientKey !== key) {
+    _geminiClient = new GoogleGenerativeAI(key);
+    _geminiClientKey = key;
+  }
 
   let lastError: any = null;
   for (const modelName of GEMINI_MODELS) {
@@ -365,14 +371,12 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
       if (b.taskId && !taskIds.has(b.taskId)) b.taskId = undefined;
 
     // Strip taskId de bloques que no son de estudio (rest/exercise nunca llevan tarea)
-    const routineKeywords = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
     for (const b of parsed.blocks) {
       if (b.type === 'rest' || b.type === 'exercise') {
         b.taskId = undefined;
       }
       // Forzar tipo rest para bloques con labels de rutina (la IA a veces usa tipo incorrecto)
-      const labelLower = (b.label ?? '').toLowerCase();
-      if (routineKeywords.some(k => labelLower.includes(k))) {
+      if (isRoutineLabel(b.label ?? '')) {
         b.type = 'rest';
         b.taskId = undefined;
       }

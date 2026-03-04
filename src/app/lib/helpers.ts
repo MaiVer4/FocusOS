@@ -139,12 +139,12 @@ export function formatCountdown(seconds: number): string {
 
 /**
  * Given a start time as HH:mm and a duration in minutes,
- * returns the end time as HH:mm (same-day, wraps at 23:59).
+ * returns the end time as HH:mm (wraps at 24:00 → 00:00).
  */
 export function addMinutesToTime(time: string, minutes: number): string {
   const [h, m] = time.split(':').map(Number);
   const total = h * 60 + m + minutes;
-  const endH = Math.min(23, Math.floor(total / 60));
+  const endH = Math.floor(total / 60) % 24;
   const endM = total % 60;
   return `${String(endH).padStart(2, '0')}:${String(endM).padStart(2, '0')}`;
 }
@@ -189,6 +189,19 @@ export function formatDateDisplay(dateStr: string, options?: Intl.DateTimeFormat
 }
 
 // ─── Score helpers ─────────────────────────────────────────────────────────────
+
+/** Labels de bloques de rutina que NO deben recibir tareas de estudio */
+export const ROUTINE_LABELS = [
+  'cena', 'desayuno', 'almuerzo', 'comida', 'transporte',
+  'redes sociales', 'relajación', 'preparación', 'dormir',
+  'actividades formales', 'sena', 'rutina', 'despertar',
+];
+
+/** Comprueba si un label de bloque corresponde a una rutina */
+export function isRoutineLabel(label: string): boolean {
+  const lower = label.toLowerCase();
+  return ROUTINE_LABELS.some(r => lower.includes(r));
+}
 
 export function scoreColor(score: number): string {
   if (score >= 85) return 'text-green-500';

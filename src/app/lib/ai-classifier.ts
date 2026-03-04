@@ -10,50 +10,7 @@ export interface ParsedItem {
   isDeliverable?: boolean;
 }
 
-// ─── System prompt para DeepSeek ────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `Eres un asistente de productividad. El usuario te dará una lista de tareas o actividades. Clasifica cada ítem y responde SOLO con un array JSON válido (sin markdown, sin texto extra, sin comentarios).
-
-Para cada ítem devuelve un objeto con exactamente estas claves:
-{
-  "subject": "nombre limpio de la tarea, SIN la fecha ni hora de entrega (máx 60 caracteres)",
-  "description": "descripción de 1 oración",
-  "difficulty": "high" | "medium" | "low",
-  "blockType": "deep" | "light" | "exercise" | "rest",
-  "estimatedMinutes": número entero,
-  "dueDate": "YYYY-MM-DDTHH:mm" o "YYYY-MM-DD" o null,
-  "isDeliverable": true | false
-}
-
-REGLAS CRÍTICAS PARA subject:
-- Elimina del subject cualquier mención de fecha, hora o plazo de entrega.
-- Ejemplo: "Resolver ejercicios de JS capítulo 5 fecha de entrega: martes 3 de marzo a las 6 pm" → subject: "Resolver ejercicios de JS capítulo 5"
-- Ejemplo: "Entregar informe de BD para el viernes" → subject: "Informe de BD"
-- Ejemplo: "CRUD en Java para mañana a las 11:59 pm" → subject: "CRUD en Java"
-
-REGLAS PARA dueDate:
-- Usa la fecha de hoy que te proporcionaré para calcular fechas relativas ("hoy", "mañana", "este viernes", "el lunes", "martes 3 de marzo", etc.)
-- Si el usuario dice un día de la semana sin especificar cuál, usa el PRÓXIMO día con ese nombre.
-- Si incluye hora, usa formato "YYYY-MM-DDTHH:mm". Si no incluye hora, usa "YYYY-MM-DD".
-- Interpreta "6 pm" como "18:00", "11:59 pm" como "23:59", "8 am" como "08:00", etc.
-
-REGLAS PARA isDeliverable:
-- true si el usuario menciona: "entrega", "entregar", "entregable", "fecha de entrega", "deadline", "fecha límite", "parcial", "examen", "quiz", "evaluación", "sustentación".
-- true si tiene una fecha/hora de entrega explícita.
-- false para tareas generales sin fecha límite clara.
-
-Criterios de blockType:
-- "deep": trabajo intelectual intenso (estudiar, programar, redactar, investigar, diseñar, resolver ejercicios)
-- "light": tareas leves (revisar emails, llamadas, reuniones cortas, organizar, leer superficialmente)
-- "exercise": actividad física (gym, correr, caminar, yoga, deporte, natación, bicicleta)
-- "rest": descanso, meditación, siesta, pausa
-
-Criterios de difficulty:
-- "high": requiere mucho esfuerzo o concentración sostenida
-- "medium": esfuerzo moderado
-- "low": tarea simple, rutinaria o de bajo costo cognitivo`;
-
-// ─── Keyword-based fallback ───────────────────────────────────────────────────
+// ─── Keyword-based classifier ─────────────────────────────────────────────────
 
 const DAY_NAMES: Record<string, number> = {
   domingo: 0, lunes: 1, martes: 2, miércoles: 3, miercoles: 3,
@@ -214,42 +171,5 @@ export async function classifyTasksWithAI(rawText: string): Promise<ParsedItem[]
 
   if (lines.length === 0) return [];
 
-  const apiKey = 'sk-a43ba1ed85624702a4a74a370331be9d';
-
-  const today = new Date().toLocaleDateString('es-ES', {
-    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
-  });
-
-  try {
-    const res = await fetch('https://api.deepseek.com/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: `Hoy es ${today}.\n\nTareas:\n${lines.join('\n')}` },
-        ],
-        temperature: 0.2,
-      }),
-    });
-
-    if (!res.ok) throw new Error(`DeepSeek ${res.status}`);
-
-    const data = await res.json();
-    const content = (data.choices[0].message.content as string)
-      .trim()
-      .replace(/^```json\n?/, '')
-      .replace(/^```\n?/, '')
-      .replace(/\n?```$/, '');
-
-    const parsed = JSON.parse(content) as ParsedItem[];
-    return parsed;
-  } catch (err) {
-    console.error('DeepSeek classification failed, using keyword fallback:', err);
-    return lines.map(classifyByKeywords);
-  }
+  return lines.map(classifyByKeywords);
 }

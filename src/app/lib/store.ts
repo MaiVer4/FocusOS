@@ -1,13 +1,13 @@
 import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
-import { addMinutesToTime, dateToStr, durationBetween, todayStr } from './helpers';
+import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel } from './helpers';
 import { cloudSync } from './cloud-sync';
 import {
   analyzeHistory, LearnedProfile,
   getProductivityScore, getCategoryBonus, getOptimalDuration,
   smartAssignTasksToSlots,
 } from './learning-engine';
-import { generateAISchedule, getAIDailySummary, resetAIClient } from './ai-engine';
-import type { AIScheduleResult, AIDailySummary, AIProvider } from './ai-engine';
+import { generateAISchedule, resetAIClient } from './ai-engine';
+import type { AIScheduleResult, AIProvider } from './ai-engine';
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -416,7 +416,7 @@ class Store {
   private blocks: Block[] = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
   private metrics: DailyMetrics[] = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
   private settings: UserSettings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
-  private profile: LearnedProfile = loadFromStorage<LearnedProfile>(STORAGE_KEYS.profile, null as any);
+  private profile: LearnedProfile | null = loadFromStorage<LearnedProfile | null>(STORAGE_KEYS.profile, null);
 
   constructor() {
     _storeInstance = this;
@@ -437,17 +437,17 @@ class Store {
       delete this.settings.geminiApiKey;
     }
 
-    // Migrar horario SENA: corregir valores antiguos
-    // Si scheduleStartTime es anterior a 12:00, actualizar a 12:00
-    if (this.settings.scheduleStartTime < '12:00') {
+    // Migrar horario SENA: corregir solo valores legacy inválidos
+    // Si scheduleStartTime nunca fue establecido (legacy vacío o anterior a 06:00)
+    if (!this.settings.scheduleStartTime || this.settings.scheduleStartTime < '06:00') {
       this.settings.scheduleStartTime = '12:00';
     }
-    // Si scheduleEndTime no es 18:00 (valor correcto SENA)
-    if (this.settings.scheduleEndTime !== '18:00') {
+    // Si scheduleEndTime nunca fue establecido
+    if (!this.settings.scheduleEndTime || this.settings.scheduleEndTime < '06:00') {
       this.settings.scheduleEndTime = '18:00';
     }
     // Asegurar arrivalTime coherente (después de scheduleEndTime)
-    if (this.settings.arrivalTime <= this.settings.scheduleEndTime) {
+    if (!this.settings.arrivalTime || this.settings.arrivalTime <= this.settings.scheduleEndTime) {
       this.settings.arrivalTime = '18:45';
     }
   }
@@ -697,10 +697,9 @@ class Store {
       .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
 
     // Bloques libres (sin tarea, pendientes, solo deep/light de estudio — no rest, exercise, ni rutinas)
-    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
     const freeBlocks = dayBlocks.filter(
       b => !b.taskId && b.status === 'pending' && b.type !== 'rest' && b.type !== 'exercise'
-        && !routineLabels.some(r => (b.label ?? '').toLowerCase().includes(r))
+        && !isRoutineLabel(b.label ?? '')
     );
 
     if (dayTasks.length === 0 || freeBlocks.length === 0) return;
@@ -738,29 +737,6 @@ class Store {
       s.id === subtaskId ? { ...s, done: !s.done } : s
     );
     this.updateTask(taskId, { subtasks });
-  }
-
-  /** Tareas que vencen en una fecha específica */
-  getTasksForDate(date: string): Task[] {
-    return this.tasks.filter(t => {
-      if (!t.dueDate) return false; // tareas sin fecha no se asignan a un día
-      const taskDate = t.dueDate.split('T')[0];
-      return taskDate === date;
-    });
-  }
-
-  /** Tareas sin fecha de entrega (personales/repaso) */
-  getTasksWithoutDate(): Task[] {
-    return this.tasks.filter(t => !t.dueDate && t.status !== 'terminada');
-  }
-
-  /** Tareas vencidas (fecha pasada) que no están terminadas ni aplazadas */
-  getOverdueTasks(date: string): Task[] {
-    return this.tasks.filter(t => {
-      if (!t.dueDate) return false;
-      const taskDate = t.dueDate.split('T')[0];
-      return taskDate < date && t.status !== 'terminada' && t.status !== 'aplazada';
-    });
   }
 
   /**
@@ -1090,9 +1066,7 @@ class Store {
     this.blocks = [...this.blocks, block];
 
     // Auto-asignar tarea solo a bloques de estudio (deep/light) que no sean rutinas
-    const routineLabels = ['cena', 'desayuno', 'almuerzo', 'comida', 'transporte', 'redes sociales', 'relajación', 'preparación', 'dormir', 'actividades formales', 'sena', 'rutina', 'despertar'];
-    const isRoutineBlock = routineLabels.some(r => (block.label ?? '').toLowerCase().includes(r));
-    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineBlock) {
+    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineLabel(block.label ?? '')) {
       const dayBlocks = this.blocks.filter(b => b.date === block.date);
       const tasksWithBlocks = new Set(
         dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
@@ -1467,31 +1441,6 @@ class Store {
     return { blocks: newBlocks, insights: result.insights };
   }
 
-  /**
-   * Obtiene un resumen/análisis del día generado por IA.
-   */
-  async getAISummary(date: string): Promise<AIDailySummary> {
-    if (!this.isAIEnabled()) {
-      throw new Error('API key de IA no configurada.');
-    }
-
-    const { provider, apiKey } = this.getAIConfig();
-    const blocks = this.getBlocks(date);
-    const tasks = this.tasks.filter(t => t.status !== 'terminada');
-    const recentMetrics = this.metrics.slice(-14);
-
-    return getAIDailySummary(
-      provider,
-      apiKey,
-      date,
-      blocks,
-      tasks,
-      this.getSettings(),
-      this.profile,
-      recentMetrics,
-    );
-  }
-
   // ─── Learning Profile ──────────────────────────────────────────────────────
 
   /** Devuelve el perfil de aprendizaje actual */
@@ -1508,24 +1457,13 @@ class Store {
     // Solo recalcular si hay datos suficientes
     const terminal = this.blocks.filter(b => b.status === 'completed' || b.status === 'failed');
     if (terminal.length < 5) {
-      this.profile = null as any;
+      this.profile = null;
       return;
     }
     this.profile = analyzeHistory(this.blocks, this.tasks);
     saveToStorage(STORAGE_KEYS.profile, this.profile);
   }
 
-  clearAll(): void {
-    cloudSync.trackDeletions('tasks', this.tasks.map(t => t.id));
-    cloudSync.trackDeletions('blocks', this.blocks.map(b => b.id));
-    cloudSync.trackDeletions('metrics', this.metrics.map(m => m.date));
-    this.tasks = [];
-    this.blocks = [];
-    this.metrics = [];
-    saveToStorage(STORAGE_KEYS.tasks, this.tasks);
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-    saveToStorage(STORAGE_KEYS.metrics, this.metrics);
-  }
 }
 
 export const store = new Store();
