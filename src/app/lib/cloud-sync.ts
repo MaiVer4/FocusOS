@@ -199,16 +199,36 @@ class CloudSync {
    * Para cada item, gana el que tenga `_v` mayor.
    * Items en tombstones se excluyen del resultado final.
    */
+  /**
+   * Merge inteligente por item.
+   * - Ambos existen → gana el que tenga `_v` mayor.
+   * - Solo en remoto → agregar (item nuevo de otro dispositivo).
+   * - Solo en local:
+   *   - Si tiene `_v > 0` y `_v <= remoteDocTs` → fue eliminado por el otro
+   *     dispositivo (él conocía el item y decidió no incluirlo) → OMITIR.
+   *   - Si `_v > remoteDocTs` o no tiene `_v` → adición local reciente → MANTENER.
+   * - Items en tombstones se excluyen siempre.
+   *
+   * @param remoteDocTs  `updatedAt` del documento Firestore remoto.
+   *                     Permite detectar eliminaciones cross-device.
+   */
   private mergeByVersion(
     local: unknown[],
     remote: unknown[],
     keyFn: (item: any) => string,
     tombstones: Set<string>,
+    remoteDocTs?: number,
   ): unknown[] {
     const localMap = new Map<string, any>();
+    // Guardar el _v original de cada item local (antes de ensureVersion)
+    // para distinguir items con _v real vs items legacy sin _v.
+    const localOrigV = new Map<string, number>();
     for (const item of local) {
+      const origV = typeof (item as any)._v === 'number' ? (item as any)._v : 0;
       const versioned = ensureVersion(item as Record<string, unknown>);
-      localMap.set(keyFn(versioned), versioned);
+      const key = keyFn(versioned);
+      localMap.set(key, versioned);
+      localOrigV.set(key, origV);
     }
 
     const remoteMap = new Map<string, any>();
@@ -229,6 +249,14 @@ class CloudSync {
       const remoteItem = remoteMap.get(key);
 
       if (localItem && !remoteItem) {
+        // Item solo en local. ¿Fue eliminado por otro dispositivo?
+        // Si el item tenía _v real (> 0) y es anterior a la escritura remota,
+        // el otro dispositivo lo conocía y decidió eliminarlo → omitir.
+        const origV = localOrigV.get(key) ?? 0;
+        if (remoteDocTs && remoteDocTs > 0 && origV > 0 && origV <= remoteDocTs) {
+          continue; // eliminado remotamente
+        }
+        // Item creado localmente después del último sync, o legacy sin _v → mantener
         result.push(localItem);
       } else if (!localItem && remoteItem) {
         result.push(remoteItem);
@@ -612,7 +640,7 @@ class CloudSync {
       const keyFn = CloudSync.ARRAY_KEY_FN[collection];
       if (keyFn && Array.isArray(cloud.value) && Array.isArray(localData)) {
         const tombstones = getTombstoneIds(collection);
-        const merged = this.mergeByVersion(localData, cloud.value as unknown[], keyFn, tombstones);
+        const merged = this.mergeByVersion(localData, cloud.value as unknown[], keyFn, tombstones, cloud.updatedAt);
 
         localStorage.setItem(storageKey, JSON.stringify(merged));
 
@@ -699,6 +727,7 @@ class CloudSync {
               cloud.value as unknown[],
               keyFn,
               tombstones,
+              cloud.updatedAt,
             );
             localStorage.setItem(storageKey, JSON.stringify(merged));
           } else {
@@ -757,6 +786,7 @@ class CloudSync {
                 data as unknown[],
                 keyFn,
                 tombstones,
+                updatedAt,
               );
               localStorage.setItem(storageKey, JSON.stringify(merged));
             } else {
