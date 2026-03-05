@@ -619,6 +619,11 @@ class CloudSync {
           // Ignorar escrituras propias
           if (writerDeviceId === DEVICE_ID) return;
 
+          // Ignorar snapshots con timestamp igual o anterior al que ya tenemos
+          // (evita que el snapshot inicial del cache sobrescriba datos frescos de initialSync)
+          const localUpdatedAt = this.getLocalUpdatedAt(collection);
+          if (updatedAt > 0 && updatedAt <= localUpdatedAt) return;
+
           if (data !== null && data !== undefined) {
             try {
               if (this.active) this.setStatus('syncing');
