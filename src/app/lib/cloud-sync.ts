@@ -253,6 +253,15 @@ class CloudSync {
     // Después de initialSync el store se recargará con los datos correctos de la nube.
     for (const timer of Object.values(this.debounceTimers)) clearTimeout(timer);
     this.debounceTimers = {};
+    // Restaurar meta timestamps que uploadDebounced pudo haber adelantado espuriamente
+    const metaBeforeDiscard = this.loadMeta();
+    for (const col of Object.keys(this.pendingUploads)) {
+      // Si había un pending upload, su timestamp fue adelantado; revertirlo
+      if ((COLLECTIONS as readonly string[]).includes(col)) {
+        delete metaBeforeDiscard[col as Collection];
+      }
+    }
+    this.saveMeta(metaBeforeDiscard);
     this.pendingUploads = {};
 
     try {
@@ -337,7 +346,10 @@ class CloudSync {
   uploadDebounced(collection: string, data: unknown): void {
     // Guardar siempre para flush posterior
     this.pendingUploads[collection] = data;
-    if ((COLLECTIONS as readonly string[]).includes(collection)) {
+
+    // Solo actualizar meta timestamp cuando la sync está activa
+    // (evita adelantar timestamps antes de initialSync)
+    if (this.active && (COLLECTIONS as readonly string[]).includes(collection)) {
       this.setLocalUpdatedAt(collection as Collection, Date.now());
     }
 
@@ -552,14 +564,22 @@ class CloudSync {
           // Ambos lados tienen datos reales → MERGE por ID
           const keyFn = CloudSync.ARRAY_KEY_FN[collection];
           if (keyFn && Array.isArray(cloudData) && Array.isArray(localData)) {
-            // Nube es primary (source of truth), local aporta adiciones
-            const merged = this.mergeByKey(cloudData, localData, keyFn);
+            // Determinar quién es primary según timestamps:
+            // - Si local fue modificado después de la nube → local es primary
+            //   (el usuario hizo cambios que no alcanzaron a subirse antes de recargar)
+            // - Si la nube es más reciente → nube es primary (cambios de otro dispositivo)
+            const localIsNewer = localUpdatedAt > cloudUpdatedAt;
+            const primary = localIsNewer ? localData : cloudData;
+            const secondary = localIsNewer ? cloudData : localData;
+            const merged = this.mergeByKey(primary, secondary, keyFn);
             localStorage.setItem(storageKey, JSON.stringify(merged));
-            const hasLocalOnly = merged.length > cloudData.length;
-            if (hasLocalOnly) {
-              // Subir el merge para que el otro dispositivo reciba las adiciones locales
+
+            // Siempre subir el resultado para que ambos lados estén al día
+            const hasNewItems = merged.length > primary.length;
+            const needsUpload = localIsNewer || hasNewItems;
+            if (needsUpload) {
               await saveUserData(collection, merged, DEVICE_ID);
-              console.log(`[CloudSync] ${collection}: merged (${cloudData.length} nube + ${merged.length - cloudData.length} local)`);
+              console.log(`[CloudSync] ${collection}: merged (local${localIsNewer ? ' primary' : ''}, ${merged.length} items${hasNewItems ? ', +' + (merged.length - primary.length) + ' new' : ''})`);
             } else {
               console.log(`[CloudSync] ${collection}: nube al día (${cloudData.length} items)`);
             }
