@@ -506,19 +506,28 @@ class CloudSync {
   /**
    * Sync al conectar.
    *
-   * Regla fundamental: la NUBE es la fuente de verdad.
-   * - Si nube tiene datos → usarlos directamente (respeta eliminaciones remotas).
-   * - Sólo se agregan al resultado los items locales que NO existen en nube
-   *   (= adiciones offline en este dispositivo).
-   * - Sólo se escribe de vuelta a Firestore si hubo adiciones locales nuevas,
-   *   para evitar race conditions que resucitan items eliminados.
+   * Regla: comparar timestamps para decidir la dirección del sync.
+   * - Si local es más reciente → local gana (subir a nube SIN merge aditivo,
+   *   porque items ausentes en local = eliminaciones que aún no se subieron).
+   * - Si nube es más reciente → nube gana (bajar a local; agregar items
+   *   locales que no estén en nube solo si son adiciones offline genuinas).
+   * - Para datos no-array (settings): el más reciente gana directamente.
+   *
+   * Usa getDocFromServer para evitar leer del caché de Firestore SDK.
    */
   private async initialSync(): Promise<void> {
     for (const collection of COLLECTIONS) {
       const storageKey = STORAGE_KEYS[collection];
 
       try {
-        const cloud = await loadUserDataWithMeta<unknown>(collection);
+        // Leer del SERVIDOR para evitar caché stale del SDK
+        let cloud: { exists: boolean; value: unknown; updatedAt: number };
+        try {
+          cloud = await loadUserDataFromServer<unknown>(collection);
+        } catch {
+          // Offline: fallback a caché local del SDK
+          cloud = await loadUserDataWithMeta<unknown>(collection);
+        }
         const cloudData = cloud.value;
         const cloudUpdatedAt = cloud.updatedAt;
         const localRaw = localStorage.getItem(storageKey);
@@ -556,32 +565,32 @@ class CloudSync {
           console.log(`[CloudSync] ${collection}: cargado de la nube (${cloudUpdatedAt})`);
         } else if (localHasRealData && !cloudHasRealData) {
           // El local tiene datos reales pero la nube está vacía → subir local
-          // (protege bloques recién generados que aún no se subieron)
           await saveUserData(collection, localData, DEVICE_ID);
           this.setLocalUpdatedAt(collection, Date.now());
           console.log(`[CloudSync] ${collection}: local tiene datos, nube vacía → subiendo local`);
         } else {
-          // Ambos lados tienen datos reales → MERGE por ID
+          // Ambos lados tienen datos reales
           const keyFn = CloudSync.ARRAY_KEY_FN[collection];
           if (keyFn && Array.isArray(cloudData) && Array.isArray(localData)) {
-            // Determinar quién es primary según timestamps:
-            // - Si local fue modificado después de la nube → local es primary
-            //   (el usuario hizo cambios que no alcanzaron a subirse antes de recargar)
-            // - Si la nube es más reciente → nube es primary (cambios de otro dispositivo)
             const localIsNewer = localUpdatedAt > cloudUpdatedAt;
-            const primary = localIsNewer ? localData : cloudData;
-            const secondary = localIsNewer ? cloudData : localData;
-            const merged = this.mergeByKey(primary, secondary, keyFn);
-            localStorage.setItem(storageKey, JSON.stringify(merged));
 
-            // Siempre subir el resultado para que ambos lados estén al día
-            const hasNewItems = merged.length > primary.length;
-            const needsUpload = localIsNewer || hasNewItems;
-            if (needsUpload) {
-              await saveUserData(collection, merged, DEVICE_ID);
-              console.log(`[CloudSync] ${collection}: merged (local${localIsNewer ? ' primary' : ''}, ${merged.length} items${hasNewItems ? ', +' + (merged.length - primary.length) + ' new' : ''})`);
+            if (localIsNewer) {
+              // Local es más reciente → local gana completamente.
+              // Items en nube que no están en local = eliminaciones que no se subieron.
+              // NO hacer merge aditivo (resucitaría bloques eliminados).
+              localStorage.setItem(storageKey, JSON.stringify(localData));
+              await saveUserData(collection, localData, DEVICE_ID);
+              console.log(`[CloudSync] ${collection}: local más reciente → subido (${localData.length} items)`);
             } else {
-              console.log(`[CloudSync] ${collection}: nube al día (${cloudData.length} items)`);
+              // Nube es más reciente → nube gana; agregar items locales nuevos
+              const merged = this.mergeByKey(cloudData, localData, keyFn);
+              localStorage.setItem(storageKey, JSON.stringify(merged));
+              if (merged.length > cloudData.length) {
+                await saveUserData(collection, merged, DEVICE_ID);
+                console.log(`[CloudSync] ${collection}: nube primary + ${merged.length - cloudData.length} adiciones locales`);
+              } else {
+                console.log(`[CloudSync] ${collection}: nube al día (${cloudData.length} items)`);
+              }
             }
             this.setLocalUpdatedAt(collection, Date.now());
           } else {
