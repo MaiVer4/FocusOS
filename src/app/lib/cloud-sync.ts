@@ -484,16 +484,18 @@ class CloudSync {
         dataToUpload = ensureVersionAll(data as Record<string, unknown>[]);
       }
 
-      await saveUserData(collection, dataToUpload, DEVICE_ID);
+      // saveUserData retorna el timestamp EXACTO que usó — usar ese mismo
+      // para meta, en vez de Date.now() (evita drift entre dispositivos)
+      const ts = await saveUserData(collection, dataToUpload, DEVICE_ID);
 
       // Solo limpiar si no cambió mientras se subía
       if (this.pendingUploads[collection] === data) {
         delete this.pendingUploads[collection];
       }
 
-      // Actualizar meta con timestamp actual
-      if ((COLLECTIONS as readonly string[]).includes(collection)) {
-        this.setLocalUpdatedAt(collection as Collection, Date.now());
+      // Usar el timestamp exacto de Firestore para meta
+      if (ts > 0 && (COLLECTIONS as readonly string[]).includes(collection)) {
+        this.setLocalUpdatedAt(collection as Collection, ts);
       }
 
       if (this.active) this.setStatus('connected');
@@ -504,6 +506,13 @@ class CloudSync {
       return false;
     } finally {
       this.uploadInFlight[collection] = false;
+      // Si llegaron datos nuevos mientras se subía, reintentar
+      if (this.pendingUploads[collection] !== undefined && this.active && !this.debounceTimers[collection]) {
+        this.debounceTimers[collection] = setTimeout(() => {
+          delete this.debounceTimers[collection];
+          if (this.active) this.doUpload(collection);
+        }, DEBOUNCE_MS);
+      }
     }
   }
 
@@ -585,8 +594,8 @@ class CloudSync {
           dataToUpload = ensureVersionAll(localData);
           localStorage.setItem(storageKey, JSON.stringify(dataToUpload));
         }
-        await saveUserData(collection, dataToUpload, DEVICE_ID);
-        this.setLocalUpdatedAt(collection, Date.now());
+        const ts = await saveUserData(collection, dataToUpload, DEVICE_ID);
+        this.setLocalUpdatedAt(collection, ts || Date.now());
         console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
         return;
       }
@@ -616,18 +625,19 @@ class CloudSync {
           || this.hasNewerLocalItems(localData, cloud.value as unknown[], keyFn);
 
         if (needsUpload) {
-          await saveUserData(collection, merged, DEVICE_ID);
+          const ts = await saveUserData(collection, merged, DEVICE_ID);
+          this.setLocalUpdatedAt(collection, ts || cloud.updatedAt || Date.now());
           console.log(`[CloudSync] ${collection}: merge + upload (${merged.length} items)`);
         } else {
+          this.setLocalUpdatedAt(collection, cloud.updatedAt || Date.now());
           console.log(`[CloudSync] ${collection}: merge (${merged.length} items, nube al día)`);
         }
-        this.setLocalUpdatedAt(collection, Date.now());
       } else {
         // No-array (settings): el más reciente gana
         const localUpdatedAt = this.getLocalUpdatedAt(collection);
         if (localUpdatedAt > cloud.updatedAt) {
-          await saveUserData(collection, localData, DEVICE_ID);
-          this.setLocalUpdatedAt(collection, Date.now());
+          const ts = await saveUserData(collection, localData, DEVICE_ID);
+          this.setLocalUpdatedAt(collection, ts || Date.now());
           console.log(`[CloudSync] ${collection}: local más reciente`);
         } else {
           localStorage.setItem(storageKey, JSON.stringify(cloud.value));
@@ -727,18 +737,8 @@ class CloudSync {
           // Ignorar snapshots del caché local (no son cambios remotos reales)
           if (fromCache) return;
 
-          // Ignorar escrituras propias
-          if (writerDeviceId === DEVICE_ID) {
-            // Pero actualizar el meta timestamp para tracking
-            if (updatedAt > 0) {
-              this.setLocalUpdatedAt(collection, updatedAt);
-            }
-            return;
-          }
-
-          // Ignorar snapshots que no son más nuevos
-          const lastSeen = this.getLocalUpdatedAt(collection);
-          if (updatedAt > 0 && updatedAt <= lastSeen) return;
+          // Ignorar escrituras propias (doUpload ya actualiza meta)
+          if (writerDeviceId === DEVICE_ID) return;
 
           if (data == null) return;
 

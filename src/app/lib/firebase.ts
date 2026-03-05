@@ -144,16 +144,18 @@ export function onFirebaseAuth(fn: (user: User | null) => void): () => void {
 
 // ─── Firestore Sync ─────────────────────────────────────────────────────────
 
-/** Guarda datos del usuario en Firestore con timestamp preciso */
+/** Guarda datos del usuario en Firestore. Retorna el timestamp usado. */
 export async function saveUserData(
   collection: string,
   data: unknown,
   deviceId?: string,
-): Promise<void> {
+): Promise<number> {
   const user = getActiveUser();
-  if (!user) return;
+  if (!user) return 0;
+  const ts = Date.now();
   const ref = doc(db, 'users', user.uid, 'data', collection);
-  await setDoc(ref, { value: data, updatedAt: Date.now(), deviceId: deviceId ?? '' });
+  await setDoc(ref, { value: data, updatedAt: ts, deviceId: deviceId ?? '' });
+  return ts;
 }
 
 /** Carga datos + metadata (updatedAt) desde Firestore (usa caché si disponible) */
