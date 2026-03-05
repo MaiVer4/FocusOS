@@ -1,11 +1,25 @@
 /**
- * Cloud Sync — Sincronización bidireccional localStorage ↔ Firebase Firestore.
+ * Cloud Sync v2 — Sincronización bidireccional localStorage ↔ Firebase Firestore.
+ *
+ * Mejoras respecto a v1:
+ *  1. Versionado por item: cada item tiene `_v` (timestamp de última modificación).
+ *     El merge compara versiones item-a-item, no colección completa.
+ *  2. Tombstones persistentes: las eliminaciones se guardan en localStorage
+ *     para sobrevivir recargas de página.
+ *  3. Device ID estable: persistido en localStorage, no cambia entre recargas.
+ *  4. onSnapshot como canal principal: sin polling redundante cada 3s.
+ *     Solo se hace un pull del servidor cuando la pestaña vuelve a ser visible
+ *     o la red se reconecta (para cubrir snapshots perdidos).
+ *  5. Upload directo: sin read-before-write. El merge se hace al recibir
+ *     cambios remotos, no al subir.
+ *  6. Merge inteligente: para cada item, gana el que tenga `_v` mayor.
+ *     Items eliminados (tombstones) se respetan.
  *
  * Arquitectura:
  *  - localStorage = cache rápido, funciona offline.
  *  - Firestore = fuente de verdad compartida entre dispositivos.
- *  - Cada escritura local se sube a Firestore (debounced).
- *  - onSnapshot escucha cambios remotos y los baja.
+ *  - Cada escritura local se sube a Firestore (debounced 800ms).
+ *  - onSnapshot escucha cambios remotos y los baja con merge inteligente.
  *  - El sync vive a nivel de app, NO se desconecta al cambiar de página.
  */
 
@@ -32,14 +46,119 @@ const STORAGE_KEYS: Record<Collection, string> = {
   metrics: 'focusos_metrics',
   settings: 'focusos_settings',
 };
+
+const TOMBSTONE_KEY = 'focusos_sync_tombstones';
+const DEVICE_ID_KEY = 'focusos_device_id';
 const META_KEY = 'focusos_sync_meta';
 
 const DEBOUNCE_MS = 800;
-
-// ID único de esta instancia/pestaña para distinguir escrituras propias
-const DEVICE_ID = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+// Tombstones expiran después de 7 días (limpieza)
+const TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type CloudSyncStatus = 'disconnected' | 'connecting' | 'retrying' | 'syncing' | 'connected';
+
+// ─── Device ID estable ──────────────────────────────────────────────────────
+
+function getStableDeviceId(): string {
+  try {
+    let id = localStorage.getItem(DEVICE_ID_KEY);
+    if (!id) {
+      id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(DEVICE_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `fallback-${Date.now()}`;
+  }
+}
+
+const DEVICE_ID = getStableDeviceId();
+
+// ─── Tombstones persistentes ────────────────────────────────────────────────
+
+interface TombstoneEntry {
+  /** ID del item eliminado */
+  id: string;
+  /** Timestamp de eliminación */
+  deletedAt: number;
+}
+
+type TombstoneStore = Partial<Record<Collection, TombstoneEntry[]>>;
+
+function loadTombstones(): TombstoneStore {
+  try {
+    const raw = localStorage.getItem(TOMBSTONE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveTombstones(store: TombstoneStore): void {
+  try {
+    localStorage.setItem(TOMBSTONE_KEY, JSON.stringify(store));
+  } catch { /* ignore */ }
+}
+
+function addTombstone(collection: Collection, id: string): void {
+  const store = loadTombstones();
+  if (!store[collection]) store[collection] = [];
+  // No duplicar
+  if (!store[collection]!.some(t => t.id === id)) {
+    store[collection]!.push({ id, deletedAt: Date.now() });
+  }
+  saveTombstones(store);
+}
+
+function addTombstones(collection: Collection, ids: string[]): void {
+  const store = loadTombstones();
+  if (!store[collection]) store[collection] = [];
+  const existing = new Set(store[collection]!.map(t => t.id));
+  const now = Date.now();
+  for (const id of ids) {
+    if (!existing.has(id)) {
+      store[collection]!.push({ id, deletedAt: now });
+      existing.add(id);
+    }
+  }
+  saveTombstones(store);
+}
+
+function getTombstoneIds(collection: Collection): Set<string> {
+  const store = loadTombstones();
+  const entries = store[collection] ?? [];
+  return new Set(entries.map(e => e.id));
+}
+
+/** Limpia tombstones expirados (> 7 días) */
+function cleanExpiredTombstones(): void {
+  const store = loadTombstones();
+  const cutoff = Date.now() - TOMBSTONE_TTL_MS;
+  let changed = false;
+  for (const col of COLLECTIONS) {
+    const entries = store[col];
+    if (!entries) continue;
+    const filtered = entries.filter(e => e.deletedAt > cutoff);
+    if (filtered.length !== entries.length) {
+      store[col] = filtered;
+      changed = true;
+    }
+  }
+  if (changed) saveTombstones(store);
+}
+
+// ─── Item versioning helpers ────────────────────────────────────────────────
+
+/** Agrega `_v` (version timestamp) a un item si no lo tiene */
+function ensureVersion<T extends Record<string, unknown>>(item: T): T & { _v: number } {
+  if (typeof (item as any)._v === 'number') return item as T & { _v: number };
+  return { ...item, _v: Date.now() };
+}
+
+/** Agrega `_v` a todos los items de un array */
+function ensureVersionAll<T extends Record<string, unknown>>(items: T[]): Array<T & { _v: number }> {
+  return items.map(ensureVersion);
+}
 
 // ─── CloudSync ──────────────────────────────────────────────────────────────
 
@@ -53,9 +172,12 @@ class CloudSync {
   private changeCallbacks: Array<() => void> = [];
   private status: CloudSyncStatus = 'disconnected';
   private statusCallbacks: Array<(status: CloudSyncStatus) => void> = [];
-  private pullInProgress = false;
-  private pollTimer: ReturnType<typeof setInterval> | null = null;
-  private static readonly POLL_INTERVAL_MS = 3_000;
+  /** Track the last updatedAt we've seen from the server per collection */
+  private lastSeenRemoteTs: Partial<Record<Collection, number>> = {};
+  /** Whether initial sync is still running (suppress listener writes during) */
+  private initialSyncRunning = false;
+  /** Whether an upload is in flight per collection */
+  private uploadInFlight: Partial<Record<string, boolean>> = {};
 
   /** Funciones clave para cada colección que es un array mergeable */
   private static readonly ARRAY_KEY_FN: Record<string, (item: any) => string> = {
@@ -64,137 +186,132 @@ class CloudSync {
     metrics: (item) => item.date,
   };
 
-  /** IDs eliminados localmente, pendientes de propagar a la nube */
-  private localDeletions: Record<string, Set<string>> = {};
-
   constructor() {
+    this.loadMeta();
     this.installLifecycleHandlers();
+    cleanExpiredTombstones();
   }
 
-  // ── Merge helpers ───────────────────────────────────────────────────────
+  // ── Versionado + Merge inteligente ──────────────────────────────────────
 
-  /** Registra una eliminación local para que el merge no resucite el item */
+  /**
+   * Merge inteligente por item.
+   * Para cada item, gana el que tenga `_v` mayor.
+   * Items en tombstones se excluyen del resultado final.
+   */
+  private mergeByVersion(
+    local: unknown[],
+    remote: unknown[],
+    keyFn: (item: any) => string,
+    tombstones: Set<string>,
+  ): unknown[] {
+    const localMap = new Map<string, any>();
+    for (const item of local) {
+      const versioned = ensureVersion(item as Record<string, unknown>);
+      localMap.set(keyFn(versioned), versioned);
+    }
+
+    const remoteMap = new Map<string, any>();
+    for (const item of remote) {
+      const versioned = ensureVersion(item as Record<string, unknown>);
+      remoteMap.set(keyFn(versioned), versioned);
+    }
+
+    // Unión de todas las keys
+    const allKeys = new Set([...localMap.keys(), ...remoteMap.keys()]);
+    const result: unknown[] = [];
+
+    for (const key of allKeys) {
+      // Excluir items en tombstones
+      if (tombstones.has(key)) continue;
+
+      const localItem = localMap.get(key);
+      const remoteItem = remoteMap.get(key);
+
+      if (localItem && !remoteItem) {
+        result.push(localItem);
+      } else if (!localItem && remoteItem) {
+        result.push(remoteItem);
+      } else if (localItem && remoteItem) {
+        // Ambos existen: gana el de mayor `_v`
+        const lv = typeof localItem._v === 'number' ? localItem._v : 0;
+        const rv = typeof remoteItem._v === 'number' ? remoteItem._v : 0;
+        result.push(lv >= rv ? localItem : remoteItem);
+      }
+    }
+
+    return result;
+  }
+
+  // ── Tombstone API pública (llamada desde store.ts) ──────────────────────
+
+  /** Registra una eliminación local persistente */
   trackDeletion(collection: string, id: string): void {
-    if (!this.localDeletions[collection]) this.localDeletions[collection] = new Set();
-    this.localDeletions[collection].add(id);
+    if ((COLLECTIONS as readonly string[]).includes(collection)) {
+      addTombstone(collection as Collection, id);
+    }
   }
 
   /** Registra múltiples eliminaciones locales */
   trackDeletions(collection: string, ids: string[]): void {
-    if (!this.localDeletions[collection]) this.localDeletions[collection] = new Set();
-    for (const id of ids) this.localDeletions[collection].add(id);
-  }
-
-  /**
-   * Merge dos arrays por clave única.
-   * - `primary` siempre gana para items que existen en ambos.
-   * - Items solo en `secondary` se agregan (salvo los de `deletions`).
-   */
-  private mergeByKey(
-    primary: unknown[],
-    secondary: unknown[],
-    keyFn: (item: any) => string,
-    deletions?: Set<string>,
-  ): unknown[] {
-    const primaryKeys = new Set(primary.map(keyFn));
-    const merged = [...primary];
-    for (const item of secondary) {
-      const key = keyFn(item);
-      if (!primaryKeys.has(key) && !deletions?.has(key)) {
-        merged.push(item);
-      }
+    if ((COLLECTIONS as readonly string[]).includes(collection)) {
+      addTombstones(collection as Collection, ids);
     }
-    return merged;
   }
 
-  /** ¿Hay cambios locales pendientes de subir para esta colección? */
-  private hasPendingChanges(collection: string): boolean {
-    return !!(this.pendingUploads[collection] || this.debounceTimers[collection]);
+  // ── Meta timestamps ────────────────────────────────────────────────────
+
+  private loadMeta(): void {
+    try {
+      const raw = localStorage.getItem(META_KEY);
+      if (raw) {
+        this.lastSeenRemoteTs = JSON.parse(raw);
+      }
+    } catch { /* ignore */ }
+  }
+
+  private saveMeta(): void {
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(this.lastSeenRemoteTs));
+    } catch { /* ignore */ }
+  }
+
+  private getLocalUpdatedAt(collection: Collection): number {
+    return this.lastSeenRemoteTs[collection] ?? 0;
+  }
+
+  private setLocalUpdatedAt(collection: Collection, ts: number): void {
+    this.lastSeenRemoteTs[collection] = ts;
+    this.saveMeta();
   }
 
   // ── Lifecycle: visibilitychange + online ─────────────────────────────────
 
   private installLifecycleHandlers(): void {
-    // Cuando la pestaña cambia de visibilidad
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         if (this.active) {
-          // Flush uploads que pudieron quedar atascados por throttle de mobile
+          // Flush uploads que pudieron quedar atascados
           this.flushPending();
-          // Pull inmediato + reanudar polling
-          this.pullFromCloud();
-          this.startPolling();
+          // Pull una vez del servidor para cubrir snapshots perdidos en background
+          this.reconcileFromServer();
         } else if (!this.connecting) {
           this.connect();
         }
-      } else {
-        // Pestaña oculta → pausar polling para ahorrar batería
-        this.stopPolling();
       }
     });
 
-    // Cuando vuelve la red, reconectar
     window.addEventListener('online', () => {
       if (!this.active && !this.connecting) {
         this.connect();
       } else if (this.active) {
-        // Red de vuelta → pull inmediato + reanudar polling
-        this.pullFromCloud();
-        this.startPolling();
+        this.flushPending();
+        this.reconcileFromServer();
       }
     });
   }
 
-  // ── Polling periódico ─────────────────────────────────────────────────
-
-  private startPolling(): void {
-    // No duplicar timers
-    if (this.pollTimer) return;
-    this.pollTimer = setInterval(() => {
-      // Solo si seguimos activos y la página es visible
-      if (!this.active || document.visibilityState !== 'visible') {
-        this.stopPolling();
-        return;
-      }
-      this.pullFromCloud();
-    }, CloudSync.POLL_INTERVAL_MS);
-  }
-
-  private stopPolling(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-  }
-
-  private loadMeta(): Partial<Record<Collection, number>> {
-    try {
-      const raw = localStorage.getItem(META_KEY);
-      if (!raw) return {};
-      return JSON.parse(raw) as Partial<Record<Collection, number>>;
-    } catch {
-      return {};
-    }
-  }
-
-  private saveMeta(meta: Partial<Record<Collection, number>>): void {
-    try {
-      localStorage.setItem(META_KEY, JSON.stringify(meta));
-    } catch {
-      // ignore
-    }
-  }
-
-  private getLocalUpdatedAt(collection: Collection): number {
-    const meta = this.loadMeta();
-    return meta[collection] ?? 0;
-  }
-
-  private setLocalUpdatedAt(collection: Collection, ts: number): void {
-    const meta = this.loadMeta();
-    meta[collection] = ts;
-    this.saveMeta(meta);
-  }
+  // ── Wait for Firebase session ──────────────────────────────────────────
 
   private async waitForRestoredFirebaseSession(timeoutMs = 2500): Promise<boolean> {
     const startedAt = Date.now();
@@ -205,7 +322,7 @@ class CloudSync {
     return !!(getFirebaseUser() || auth.currentUser);
   }
 
-  // ── Pub/Sub para cambios remotos ────────────────────────────────────────
+  // ── Pub/Sub ─────────────────────────────────────────────────────────────
 
   onStatusChange(fn: (status: CloudSyncStatus) => void): () => void {
     this.statusCallbacks.push(fn);
@@ -222,9 +339,9 @@ class CloudSync {
   private setStatus(next: CloudSyncStatus): void {
     if (this.status === next) return;
     this.status = next;
-    this.statusCallbacks.forEach(fn => {
+    for (const fn of this.statusCallbacks) {
       try { fn(next); } catch (e) { console.error('[CloudSync] status callback error:', e); }
-    });
+    }
   }
 
   onRemoteChange(fn: () => void): () => void {
@@ -235,9 +352,9 @@ class CloudSync {
   }
 
   private notifyRemoteChange(): void {
-    this.changeCallbacks.forEach(fn => {
+    for (const fn of this.changeCallbacks) {
       try { fn(); } catch (e) { console.error('[CloudSync] callback error:', e); }
-    });
+    }
   }
 
   // ── Conexión ────────────────────────────────────────────────────────────
@@ -248,24 +365,14 @@ class CloudSync {
     this.connecting = true;
     this.setStatus('connecting');
 
-    // Descartar uploads acumulados durante la inicialización del Store.
-    // Esos datos vienen del localStorage local (posiblemente obsoleto).
-    // Después de initialSync el store se recargará con los datos correctos de la nube.
+    // Descartar uploads pre-connection (datos del constructor del Store,
+    // posiblemente obsoletos — initialSync decidirá qué es correcto)
     for (const timer of Object.values(this.debounceTimers)) clearTimeout(timer);
     this.debounceTimers = {};
-    // Restaurar meta timestamps que uploadDebounced pudo haber adelantado espuriamente
-    const metaBeforeDiscard = this.loadMeta();
-    for (const col of Object.keys(this.pendingUploads)) {
-      // Si había un pending upload, su timestamp fue adelantado; revertirlo
-      if ((COLLECTIONS as readonly string[]).includes(col)) {
-        delete metaBeforeDiscard[col as Collection];
-      }
-    }
-    this.saveMeta(metaBeforeDiscard);
     this.pendingUploads = {};
 
     try {
-      // 1) Preferir sesión Firebase ya restaurada (persiste entre recargas)
+      // 1) Preferir sesión Firebase ya restaurada
       await this.waitForRestoredFirebaseSession();
       const existingFirebaseUser = getFirebaseUser() ?? auth.currentUser;
 
@@ -290,7 +397,6 @@ class CloudSync {
         await signInWithGoogleToken(token);
       }
 
-      // Confirmar que ya hay sesión Firebase activa antes de acceder a Firestore
       const activeUser = getFirebaseUser() ?? auth.currentUser;
       if (!activeUser) {
         this.connecting = false;
@@ -305,18 +411,15 @@ class CloudSync {
       // Sync inicial
       await this.initialSync();
 
-      // Escuchar cambios en tiempo real
+      // Escuchar cambios en tiempo real (canal principal)
       this.startListening();
-
-      // Subir uploads que se acumularon antes de estar activo
-      this.flushPending();
 
       this.active = true;
       this.connecting = false;
       this.setStatus('connected');
 
-      // Iniciar polling periódico para atrapar cambios que onSnapshot pierda
-      this.startPolling();
+      // Subir uploads acumulados offline
+      this.flushPending();
 
       console.log('[CloudSync] ✅ Conectado (device:', DEVICE_ID, ')');
       return true;
@@ -340,18 +443,11 @@ class CloudSync {
   // ── Subida ──────────────────────────────────────────────────────────────
 
   /**
-   * Encola datos para subir a Firestore.
-   * Si aún no estamos conectados, se acumula y se sube al conectar.
+   * Encola datos para subir a Firestore (debounced).
+   * Upload directo sin read-before-write.
    */
   uploadDebounced(collection: string, data: unknown): void {
-    // Guardar siempre para flush posterior
     this.pendingUploads[collection] = data;
-
-    // Solo actualizar meta timestamp cuando la sync está activa
-    // (evita adelantar timestamps antes de initialSync)
-    if (this.active && (COLLECTIONS as readonly string[]).includes(collection)) {
-      this.setLocalUpdatedAt(collection as Collection, Date.now());
-    }
 
     if (this.active) this.setStatus('syncing');
 
@@ -360,54 +456,45 @@ class CloudSync {
     }
 
     this.debounceTimers[collection] = setTimeout(async () => {
+      delete this.debounceTimers[collection];
       if (!this.active) return; // se subirá en flushPending al conectar
-      const data = this.pendingUploads[collection];
-      const ok = await this.doUpload(collection, data);
-      if (ok) {
-        delete this.pendingUploads[collection];
-      }
-      // Si falló, se queda en pendingUploads para el próximo flush
+      await this.doUpload(collection);
     }, DEBOUNCE_MS);
   }
 
   /**
-   * Sube a Firestore con merge: antes de escribir, lee la nube y
-   * agrega items remotos que no existan en local (adiciones de otro dispositivo).
-   * Respeta localDeletions para no resucitar items eliminados localmente.
+   * Upload directo a Firestore. Sin read-before-write.
+   * El merge se hace al RECIBIR datos remotos, no al enviar.
    */
-  private async doUpload(collection: string, data: unknown): Promise<boolean> {
+  private async doUpload(collection: string): Promise<boolean> {
+    const data = this.pendingUploads[collection];
+    if (data === undefined) return true;
+
+    // Prevenir uploads concurrentes para la misma colección
+    if (this.uploadInFlight[collection]) return false;
+    this.uploadInFlight[collection] = true;
+
     try {
       if (this.active) this.setStatus('syncing');
 
+      // Asegurar versioning en items
       let dataToUpload = data;
       const keyFn = CloudSync.ARRAY_KEY_FN[collection];
-
-      // Para colecciones array, merge con la nube para preservar adiciones remotas
       if (keyFn && Array.isArray(data)) {
-        try {
-          const cloud = await loadUserDataFromServer<unknown[]>(collection);
-          if (cloud.exists && Array.isArray(cloud.value) && cloud.value.length > 0) {
-            const deletions = this.localDeletions[collection];
-            const merged = this.mergeByKey(data, cloud.value, keyFn, deletions);
-            if (merged.length !== data.length) {
-              dataToUpload = merged;
-              // Actualizar localStorage con el resultado mergeado
-              const storageKey = STORAGE_KEYS[collection as Collection];
-              if (storageKey) {
-                localStorage.setItem(storageKey, JSON.stringify(merged));
-                this.notifyRemoteChange();
-              }
-            }
-          }
-        } catch {
-          // Si falla la lectura previa, subir local tal cual
-        }
+        dataToUpload = ensureVersionAll(data as Record<string, unknown>[]);
       }
 
       await saveUserData(collection, dataToUpload, DEVICE_ID);
 
-      // Limpiar deletions después de upload exitoso
-      delete this.localDeletions[collection];
+      // Solo limpiar si no cambió mientras se subía
+      if (this.pendingUploads[collection] === data) {
+        delete this.pendingUploads[collection];
+      }
+
+      // Actualizar meta con timestamp actual
+      if ((COLLECTIONS as readonly string[]).includes(collection)) {
+        this.setLocalUpdatedAt(collection as Collection, Date.now());
+      }
 
       if (this.active) this.setStatus('connected');
       return true;
@@ -415,206 +502,215 @@ class CloudSync {
       console.error(`[CloudSync] Error subiendo ${collection}:`, e);
       if (this.active) this.setStatus('connected');
       return false;
+    } finally {
+      this.uploadInFlight[collection] = false;
     }
   }
 
-  /** Sube inmediatamente sin debounce (para datos críticos como settings) */
+  /** Sube inmediatamente sin debounce (para datos críticos) */
   uploadImmediate(collection: string, data: unknown): void {
-    if ((COLLECTIONS as readonly string[]).includes(collection)) {
-      this.setLocalUpdatedAt(collection as Collection, Date.now());
-    }
-    // Cancelar debounce pendiente si hay
+    // Cancelar debounce pendiente
     if (this.debounceTimers[collection]) {
       clearTimeout(this.debounceTimers[collection]);
       delete this.debounceTimers[collection];
     }
-    delete this.pendingUploads[collection];
+    this.pendingUploads[collection] = data;
     if (this.active) {
-      this.doUpload(collection, data);
+      this.doUpload(collection);
     }
   }
 
-  /** Sube todos los uploads pendientes acumulados */
+  /** Sube todos los uploads pendientes */
   private async flushPending(): Promise<void> {
-    const entries = Object.entries(this.pendingUploads);
-    if (entries.length === 0) return;
+    const collections = Object.keys(this.pendingUploads);
+    if (collections.length === 0) return;
     if (this.active) this.setStatus('syncing');
-    for (const [collection, data] of entries) {
-      const ok = await this.doUpload(collection, data);
-      if (ok) {
-        // Solo borrar si se subió con éxito
-        if (this.pendingUploads[collection] === data) {
-          delete this.pendingUploads[collection];
-        }
-      }
+    for (const collection of collections) {
+      await this.doUpload(collection);
     }
     if (this.active) this.setStatus('connected');
-  }
-
-  /**
-   * Descarga cambios recientes desde Firestore que onSnapshot pudo haber perdido
-   * (ej: dispositivo en background, WebSocket caído, etc.)
-   */
-  private async pullFromCloud(): Promise<void> {
-    if (!this.active || this.pullInProgress) return;
-    this.pullInProgress = true;
-    let changed = false;
-
-    try {
-      for (const collection of COLLECTIONS) {
-        try {
-          // Forzar lectura del SERVIDOR (getDocFromServer) para no leer caché obsoleto
-          const cloud = await loadUserDataFromServer<unknown>(collection);
-          if (!cloud.exists || cloud.value === null || cloud.value === undefined) continue;
-
-          const localUpdatedAt = this.getLocalUpdatedAt(collection);
-          if (cloud.updatedAt > localUpdatedAt) {
-            const storageKey = STORAGE_KEYS[collection];
-            const keyFn = CloudSync.ARRAY_KEY_FN[collection];
-            let finalData = cloud.value;
-
-            // Si tenemos cambios locales pendientes, merge para no perderlos
-            if (keyFn && Array.isArray(cloud.value) && this.hasPendingChanges(collection)) {
-              try {
-                const localRaw = localStorage.getItem(storageKey);
-                const localData = localRaw ? JSON.parse(localRaw) : null;
-                if (Array.isArray(localData)) {
-                  const deletions = this.localDeletions[collection];
-                  finalData = this.mergeByKey(cloud.value as any[], localData, keyFn, deletions);
-                }
-              } catch { /* ignore parse errors */ }
-            }
-
-            localStorage.setItem(storageKey, JSON.stringify(finalData));
-            this.setLocalUpdatedAt(collection, cloud.updatedAt);
-            console.log(`[CloudSync] 🔄 Pull remoto: ${collection} (${cloud.updatedAt} > ${localUpdatedAt})`);
-            changed = true;
-          }
-        } catch (e) {
-          console.error(`[CloudSync] Error pull ${collection}:`, e);
-        }
-      }
-
-      if (changed) this.notifyRemoteChange();
-    } finally {
-      this.pullInProgress = false;
-    }
   }
 
   // ── Sync inicial ───────────────────────────────────────────────────────
 
   /**
-   * Sync al conectar.
-   *
-   * Regla: comparar timestamps para decidir la dirección del sync.
-   * - Si local es más reciente → local gana (subir a nube SIN merge aditivo,
-   *   porque items ausentes en local = eliminaciones que aún no se subieron).
-   * - Si nube es más reciente → nube gana (bajar a local; agregar items
-   *   locales que no estén en nube solo si son adiciones offline genuinas).
-   * - Para datos no-array (settings): el más reciente gana directamente.
-   *
-   * Usa getDocFromServer para evitar leer del caché de Firestore SDK.
+   * Sync al conectar: para cada colección, merge inteligente local ↔ nube.
+   * Usa getDocFromServer para evitar caché stale del SDK.
    */
   private async initialSync(): Promise<void> {
-    for (const collection of COLLECTIONS) {
-      const storageKey = STORAGE_KEYS[collection];
+    this.initialSyncRunning = true;
 
-      try {
-        // Leer del SERVIDOR para evitar caché stale del SDK
-        let cloud: { exists: boolean; value: unknown; updatedAt: number };
-        try {
-          cloud = await loadUserDataFromServer<unknown>(collection);
-        } catch {
-          // Offline: fallback a caché local del SDK
-          cloud = await loadUserDataWithMeta<unknown>(collection);
-        }
-        const cloudData = cloud.value;
-        const cloudUpdatedAt = cloud.updatedAt;
-        const localRaw = localStorage.getItem(storageKey);
-        const localData = localRaw ? JSON.parse(localRaw) : null;
-
-        // Determinar si los datos locales son "reales" (no vacíos)
-        const localHasRealData = Array.isArray(localData)
-          ? localData.length > 0
-          : localData !== null && localData !== undefined;
-
-        // Determinar si los datos de la nube son "reales" (no vacíos)
-        const cloudHasRealData = Array.isArray(cloudData)
-          ? cloudData.length > 0
-          : cloudData !== null && cloudData !== undefined;
-
-        // Si no hay META registrado para esta colección pero el local tiene datos,
-        // inicializar el META con el timestamp actual para que future syncs sean correctos.
-        let localUpdatedAt = this.getLocalUpdatedAt(collection);
-        if (localUpdatedAt === 0 && localHasRealData) {
-          localUpdatedAt = Date.now();
-          this.setLocalUpdatedAt(collection, localUpdatedAt);
-        }
-
-        if (!cloud.exists && !localData) {
-          // Nada que sincronizar
-        } else if (!cloud.exists && localData) {
-          // Primera vez en este dispositivo: subir local a la nube
-          await saveUserData(collection, localData, DEVICE_ID);
-          this.setLocalUpdatedAt(collection, Date.now());
-          console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
-        } else if (cloud.exists && !localHasRealData && cloudHasRealData) {
-          // La nube tiene datos reales pero el local está vacío/nulo → aplicar nube
-          localStorage.setItem(storageKey, JSON.stringify(cloudData));
-          this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
-          console.log(`[CloudSync] ${collection}: cargado de la nube (${cloudUpdatedAt})`);
-        } else if (localHasRealData && !cloudHasRealData) {
-          // El local tiene datos reales pero la nube está vacía → subir local
-          await saveUserData(collection, localData, DEVICE_ID);
-          this.setLocalUpdatedAt(collection, Date.now());
-          console.log(`[CloudSync] ${collection}: local tiene datos, nube vacía → subiendo local`);
-        } else {
-          // Ambos lados tienen datos reales
-          const keyFn = CloudSync.ARRAY_KEY_FN[collection];
-          if (keyFn && Array.isArray(cloudData) && Array.isArray(localData)) {
-            const localIsNewer = localUpdatedAt > cloudUpdatedAt;
-
-            if (localIsNewer) {
-              // Local es más reciente → local gana completamente.
-              // Items en nube que no están en local = eliminaciones que no se subieron.
-              // NO hacer merge aditivo (resucitaría bloques eliminados).
-              localStorage.setItem(storageKey, JSON.stringify(localData));
-              await saveUserData(collection, localData, DEVICE_ID);
-              console.log(`[CloudSync] ${collection}: local más reciente → subido (${localData.length} items)`);
-            } else {
-              // Nube es más reciente → nube gana; agregar items locales nuevos
-              const merged = this.mergeByKey(cloudData, localData, keyFn);
-              localStorage.setItem(storageKey, JSON.stringify(merged));
-              if (merged.length > cloudData.length) {
-                await saveUserData(collection, merged, DEVICE_ID);
-                console.log(`[CloudSync] ${collection}: nube primary + ${merged.length - cloudData.length} adiciones locales`);
-              } else {
-                console.log(`[CloudSync] ${collection}: nube al día (${cloudData.length} items)`);
-              }
-            }
-            this.setLocalUpdatedAt(collection, Date.now());
-          } else {
-            // No-array (settings, etc.): elegir el más reciente
-            if (localUpdatedAt > cloudUpdatedAt) {
-              await saveUserData(collection, localData, DEVICE_ID);
-              this.setLocalUpdatedAt(collection, Date.now());
-              console.log(`[CloudSync] ${collection}: local más reciente (${localUpdatedAt} > ${cloudUpdatedAt})`);
-            } else {
-              localStorage.setItem(storageKey, JSON.stringify(cloudData));
-              this.setLocalUpdatedAt(collection, cloudUpdatedAt || Date.now());
-              console.log(`[CloudSync] ${collection}: nube más reciente (${cloudUpdatedAt} >= ${localUpdatedAt})`);
-            }
-          }
-        }
-      } catch (e) {
-        console.error(`[CloudSync] Error sync inicial ${collection}:`, e);
+    try {
+      for (const collection of COLLECTIONS) {
+        await this.syncCollection(collection);
       }
+      this.notifyRemoteChange();
+    } finally {
+      this.initialSyncRunning = false;
     }
-
-    this.notifyRemoteChange();
   }
 
-  // ── Escucha en tiempo real ──────────────────────────────────────────────
+  /** Sync una colección individual */
+  private async syncCollection(collection: Collection): Promise<void> {
+    const storageKey = STORAGE_KEYS[collection];
+
+    try {
+      // Leer del SERVIDOR
+      let cloud: { exists: boolean; value: unknown; updatedAt: number };
+      try {
+        cloud = await loadUserDataFromServer<unknown>(collection);
+      } catch {
+        // Offline: fallback a caché
+        cloud = await loadUserDataWithMeta<unknown>(collection);
+      }
+
+      const localRaw = localStorage.getItem(storageKey);
+      const localData = localRaw ? JSON.parse(localRaw) : null;
+
+      const localHasData = Array.isArray(localData) ? localData.length > 0 : (localData != null);
+      const cloudHasData = cloud.exists && (
+        Array.isArray(cloud.value) ? (cloud.value as unknown[]).length > 0 : (cloud.value != null)
+      );
+
+      if (!cloudHasData && !localHasData) {
+        // Nada que sincronizar
+        return;
+      }
+
+      if (!cloudHasData && localHasData) {
+        // Solo local tiene datos → subir
+        let dataToUpload = localData;
+        const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+        if (keyFn && Array.isArray(localData)) {
+          dataToUpload = ensureVersionAll(localData);
+          localStorage.setItem(storageKey, JSON.stringify(dataToUpload));
+        }
+        await saveUserData(collection, dataToUpload, DEVICE_ID);
+        this.setLocalUpdatedAt(collection, Date.now());
+        console.log(`[CloudSync] ${collection}: subido a la nube (primera vez)`);
+        return;
+      }
+
+      if (cloudHasData && !localHasData) {
+        // Solo nube tiene datos → aplicar
+        localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+        this.setLocalUpdatedAt(collection, cloud.updatedAt || Date.now());
+        console.log(`[CloudSync] ${collection}: cargado de la nube`);
+        return;
+      }
+
+      // Ambos tienen datos → merge inteligente
+      const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+      if (keyFn && Array.isArray(cloud.value) && Array.isArray(localData)) {
+        const tombstones = getTombstoneIds(collection);
+        const merged = this.mergeByVersion(localData, cloud.value as unknown[], keyFn, tombstones);
+
+        localStorage.setItem(storageKey, JSON.stringify(merged));
+
+        // Determinar si hay diferencias vs la nube para decidir si subir
+        const cloudKeys = new Set((cloud.value as any[]).map(keyFn));
+        const mergedKeys = new Set((merged as any[]).map(keyFn));
+        const needsUpload = merged.length !== (cloud.value as unknown[]).length
+          || [...mergedKeys].some(k => !cloudKeys.has(k))
+          || [...cloudKeys].some(k => !mergedKeys.has(k))
+          || this.hasNewerLocalItems(localData, cloud.value as unknown[], keyFn);
+
+        if (needsUpload) {
+          await saveUserData(collection, merged, DEVICE_ID);
+          console.log(`[CloudSync] ${collection}: merge + upload (${merged.length} items)`);
+        } else {
+          console.log(`[CloudSync] ${collection}: merge (${merged.length} items, nube al día)`);
+        }
+        this.setLocalUpdatedAt(collection, Date.now());
+      } else {
+        // No-array (settings): el más reciente gana
+        const localUpdatedAt = this.getLocalUpdatedAt(collection);
+        if (localUpdatedAt > cloud.updatedAt) {
+          await saveUserData(collection, localData, DEVICE_ID);
+          this.setLocalUpdatedAt(collection, Date.now());
+          console.log(`[CloudSync] ${collection}: local más reciente`);
+        } else {
+          localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+          this.setLocalUpdatedAt(collection, cloud.updatedAt || Date.now());
+          console.log(`[CloudSync] ${collection}: nube más reciente`);
+        }
+      }
+    } catch (e) {
+      console.error(`[CloudSync] Error sync ${collection}:`, e);
+    }
+  }
+
+  /** Verifica si algún item local es más nuevo que su contraparte remota */
+  private hasNewerLocalItems(local: unknown[], remote: unknown[], keyFn: (item: any) => string): boolean {
+    const remoteMap = new Map<string, number>();
+    for (const item of remote) {
+      remoteMap.set(keyFn(item), (item as any)._v ?? 0);
+    }
+    for (const item of local) {
+      const key = keyFn(item);
+      const localV = (item as any)._v ?? 0;
+      const remoteV = remoteMap.get(key) ?? -1;
+      if (remoteV >= 0 && localV > remoteV) return true;
+    }
+    return false;
+  }
+
+  // ── Reconciliación desde servidor (reemplaza el polling) ────────────────
+
+  /**
+   * Se ejecuta cuando la pestaña vuelve a ser visible o la red se reconecta.
+   * Lee del servidor (no caché) y aplica merge inteligente.
+   * Reemplaza el polling cada 3s: más eficiente, solo cuando es necesario.
+   */
+  private async reconcileFromServer(): Promise<void> {
+    if (!this.active) return;
+    let changed = false;
+
+    try {
+      for (const collection of COLLECTIONS) {
+        try {
+          const cloud = await loadUserDataFromServer<unknown>(collection);
+          if (!cloud.exists || cloud.value == null) continue;
+
+          // ¿Es más nuevo que lo que ya vimos?
+          const lastSeen = this.getLocalUpdatedAt(collection);
+          if (cloud.updatedAt <= lastSeen) continue;
+
+          const storageKey = STORAGE_KEYS[collection];
+          const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+
+          if (keyFn && Array.isArray(cloud.value)) {
+            // Merge inteligente con datos locales
+            const localRaw = localStorage.getItem(storageKey);
+            const localData = localRaw ? JSON.parse(localRaw) : [];
+            const tombstones = getTombstoneIds(collection);
+            const merged = this.mergeByVersion(
+              Array.isArray(localData) ? localData : [],
+              cloud.value as unknown[],
+              keyFn,
+              tombstones,
+            );
+            localStorage.setItem(storageKey, JSON.stringify(merged));
+          } else {
+            // Non-array: nube gana si es más reciente
+            localStorage.setItem(storageKey, JSON.stringify(cloud.value));
+          }
+
+          this.setLocalUpdatedAt(collection, cloud.updatedAt);
+          console.log(`[CloudSync] 🔄 Reconciliación: ${collection}`);
+          changed = true;
+        } catch (e) {
+          console.error(`[CloudSync] Error reconcile ${collection}:`, e);
+        }
+      }
+
+      if (changed) this.notifyRemoteChange();
+    } catch (e) {
+      console.error('[CloudSync] Error reconciliación:', e);
+    }
+  }
+
+  // ── Escucha en tiempo real (canal principal) ────────────────────────────
 
   private startListening(): void {
     this.stopListening();
@@ -624,42 +720,56 @@ class CloudSync {
 
       const unsub = onUserDataChange(
         collection,
-        (data: unknown, updatedAt: number, writerDeviceId?: string) => {
+        (data: unknown, updatedAt: number, writerDeviceId?: string, fromCache?: boolean) => {
+          // No procesar durante initialSync
+          if (this.initialSyncRunning) return;
+
+          // Ignorar snapshots del caché local (no son cambios remotos reales)
+          if (fromCache) return;
+
           // Ignorar escrituras propias
-          if (writerDeviceId === DEVICE_ID) return;
-
-          // Ignorar snapshots con timestamp igual o anterior al que ya tenemos
-          // (evita que el snapshot inicial del cache sobrescriba datos frescos de initialSync)
-          const localUpdatedAt = this.getLocalUpdatedAt(collection);
-          if (updatedAt > 0 && updatedAt <= localUpdatedAt) return;
-
-          if (data !== null && data !== undefined) {
-            try {
-              if (this.active) this.setStatus('syncing');
-
-              let finalData = data;
-              const keyFn = CloudSync.ARRAY_KEY_FN[collection];
-
-              // Si tenemos cambios locales pendientes, merge para preservarlos
-              if (keyFn && Array.isArray(data) && this.hasPendingChanges(collection)) {
-                try {
-                  const localRaw = localStorage.getItem(storageKey);
-                  const localData = localRaw ? JSON.parse(localRaw) : null;
-                  if (Array.isArray(localData)) {
-                    const deletions = this.localDeletions[collection];
-                    finalData = this.mergeByKey(data as any[], localData, keyFn, deletions);
-                  }
-                } catch { /* ignore */ }
-              }
-
-              localStorage.setItem(storageKey, JSON.stringify(finalData));
-              this.setLocalUpdatedAt(collection, updatedAt || Date.now());
-              console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
-              this.notifyRemoteChange();
-              if (this.active) this.setStatus('connected');
-            } catch (e) {
-              console.error(`[CloudSync] Error aplicando ${collection}:`, e);
+          if (writerDeviceId === DEVICE_ID) {
+            // Pero actualizar el meta timestamp para tracking
+            if (updatedAt > 0) {
+              this.setLocalUpdatedAt(collection, updatedAt);
             }
+            return;
+          }
+
+          // Ignorar snapshots que no son más nuevos
+          const lastSeen = this.getLocalUpdatedAt(collection);
+          if (updatedAt > 0 && updatedAt <= lastSeen) return;
+
+          if (data == null) return;
+
+          try {
+            if (this.active) this.setStatus('syncing');
+
+            const keyFn = CloudSync.ARRAY_KEY_FN[collection];
+
+            if (keyFn && Array.isArray(data)) {
+              // Merge inteligente: combinar remoto con local, respetando versiones
+              const localRaw = localStorage.getItem(storageKey);
+              const localData = localRaw ? JSON.parse(localRaw) : [];
+              const tombstones = getTombstoneIds(collection);
+              const merged = this.mergeByVersion(
+                Array.isArray(localData) ? localData : [],
+                data as unknown[],
+                keyFn,
+                tombstones,
+              );
+              localStorage.setItem(storageKey, JSON.stringify(merged));
+            } else {
+              // Non-array (settings): remoto gana si es más reciente
+              localStorage.setItem(storageKey, JSON.stringify(data));
+            }
+
+            this.setLocalUpdatedAt(collection, updatedAt || Date.now());
+            console.log(`[CloudSync] 📥 Cambio remoto: ${collection}`);
+            this.notifyRemoteChange();
+            if (this.active) this.setStatus('connected');
+          } catch (e) {
+            console.error(`[CloudSync] Error aplicando ${collection}:`, e);
           }
         },
       );
@@ -669,11 +779,11 @@ class CloudSync {
   }
 
   private stopListening(): void {
-    this.unsubscribers.forEach(fn => fn());
+    for (const fn of this.unsubscribers) fn();
     this.unsubscribers = [];
   }
 
-  // ── Lifecycle ───────────────────────────────────────────────────────────
+  // ── Estado ──────────────────────────────────────────────────────────────
 
   isActive(): boolean {
     return this.active;

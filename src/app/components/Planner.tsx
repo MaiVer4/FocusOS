@@ -124,17 +124,15 @@ export function Planner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── Cloud Sync: escuchar cambios remotos para refrescar la UI ───────────
+  // ─── Escuchar cambios del store para refrescar la UI ───────────────────────
 
   useEffect(() => {
-    const unsub = cloudSync.onRemoteChange(() => {
-      refreshRef.current();
-    });
-    // También suscribirse a cambios del store (desde reloadFromStorage en Root)
+    // Root.tsx ya maneja cloudSync.onRemoteChange → store.reloadFromStorage
+    // Solo necesitamos suscribirnos al store para reaccionar a cambios
     const unsubStore = store.subscribe(() => {
       refreshRef.current();
     });
-    return () => { unsub(); unsubStore(); };
+    return () => { unsubStore(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

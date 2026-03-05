@@ -144,7 +144,7 @@ export function onFirebaseAuth(fn: (user: User | null) => void): () => void {
 
 // ─── Firestore Sync ─────────────────────────────────────────────────────────
 
-/** Guarda datos del usuario en Firestore */
+/** Guarda datos del usuario en Firestore con timestamp preciso */
 export async function saveUserData(
   collection: string,
   data: unknown,
@@ -156,19 +156,7 @@ export async function saveUserData(
   await setDoc(ref, { value: data, updatedAt: Date.now(), deviceId: deviceId ?? '' });
 }
 
-/** Carga datos del usuario desde Firestore */
-export async function loadUserData<T>(
-  collection: string,
-): Promise<T | null> {
-  const user = getActiveUser();
-  if (!user) return null;
-  const ref = doc(db, 'users', user.uid, 'data', collection);
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return null;
-  return snap.data().value as T;
-}
-
-/** Carga datos + metadata (updatedAt) desde Firestore */
+/** Carga datos + metadata (updatedAt) desde Firestore (usa caché si disponible) */
 export async function loadUserDataWithMeta<T>(
   collection: string,
 ): Promise<{ exists: boolean; value: T | null; updatedAt: number }> {
@@ -187,7 +175,6 @@ export async function loadUserDataWithMeta<T>(
 
 /**
  * Carga datos + metadata directamente del SERVIDOR, ignorando caché local.
- * Usar cuando se necesita detectar cambios que onSnapshot pudo haber perdido.
  */
 export async function loadUserDataFromServer<T>(
   collection: string,
@@ -207,11 +194,11 @@ export async function loadUserDataFromServer<T>(
 
 /**
  * Escucha cambios en tiempo real en Firestore.
- * Cuando otro dispositivo escribe, se ejecuta el callback.
+ * Pasa hasPendingWrites para que el listener sepa si es eco local.
  */
 export function onUserDataChange<T>(
   collection: string,
-  callback: (data: T | null, updatedAt: number, deviceId?: string) => void,
+  callback: (data: T | null, updatedAt: number, deviceId?: string, fromCache?: boolean) => void,
 ): Unsubscribe {
   const user = getActiveUser();
   if (!user) return () => {};
@@ -222,7 +209,8 @@ export function onUserDataChange<T>(
       return;
     }
     const d = snap.data();
-    callback(d.value as T, d.updatedAt ?? 0, d.deviceId ?? '');
+    const fromCache = snap.metadata.fromCache || snap.metadata.hasPendingWrites;
+    callback(d.value as T, d.updatedAt ?? 0, d.deviceId ?? '', fromCache);
   });
 }
 

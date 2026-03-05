@@ -554,7 +554,7 @@ class Store {
   }
 
   addTask(task: Task): void {
-    this.tasks = [...this.tasks, task];
+    this.tasks = [...this.tasks, { ...task, _v: Date.now() } as Task];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
     this.autoAssignBlock(task);
   }
@@ -614,7 +614,7 @@ class Store {
     const oldTask = this.tasks.find(t => t.id === id);
     const oldDate = oldTask?.dueDate?.split('T')[0];
 
-    this.tasks = this.tasks.map(t => t.id === id ? { ...t, ...updates } : t);
+    this.tasks = this.tasks.map(t => t.id === id ? { ...t, ...updates, _v: Date.now() } : t);
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
 
     const updatedTask = this.tasks.find(t => t.id === id);
@@ -622,7 +622,7 @@ class Store {
 
     // Update embedded task references in blocks
     this.blocks = this.blocks.map(b =>
-      b.taskId === id ? { ...b, task: updatedTask } : b
+      b.taskId === id ? { ...b, task: updatedTask, _v: Date.now() } : b
     );
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
@@ -643,6 +643,7 @@ class Store {
               duration: newDuration,
               endTime: addMinutesToTime(b.startTime, newDuration),
               priority: newPriority,
+              _v: Date.now(),
             } : b
           );
           saveToStorage(STORAGE_KEYS.blocks, this.blocks);
@@ -672,7 +673,7 @@ class Store {
       saveToStorage(STORAGE_KEYS.tasks, this.tasks);
 
       this.blocks = this.blocks.map(b =>
-        b.taskId === id ? { ...b, taskId: undefined, task: undefined } : b
+        b.taskId === id ? { ...b, taskId: undefined, task: undefined, _v: Date.now() } : b
       );
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
@@ -713,7 +714,7 @@ class Store {
       for (const [idx, task] of assignment) {
         const block = freeBlocks[idx];
         this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task } : b
+          b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
         );
       }
     } else {
@@ -723,7 +724,7 @@ class Store {
         const block = freeBlocks[i];
         const task = dayTasks[i];
         this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task } : b
+          b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
         );
       }
     }
@@ -1044,7 +1045,7 @@ class Store {
     this.blocks = this.blocks.filter(b => b.date !== date || placedIds.has(b.id));
     for (const p of placed) {
       this.blocks = this.blocks.map(b =>
-        b.id === p.id ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration } : b
+        b.id === p.id ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration, _v: Date.now() } : b
       );
     }
     this.blocks = this.blocks.filter(b => !idsToRemove.has(b.id));
@@ -1063,7 +1064,7 @@ class Store {
   }
 
   addBlock(block: Block): void {
-    this.blocks = [...this.blocks, block];
+    this.blocks = [...this.blocks, { ...block, _v: Date.now() } as Block];
 
     // Auto-asignar tarea solo a bloques de estudio (deep/light) que no sean rutinas
     if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineLabel(block.label ?? '')) {
@@ -1077,7 +1078,7 @@ class Store {
       if (available.length > 0) {
         const task = available[0]; // ya ordenadas por urgencia
         this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task } : b
+          b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
         );
       }
     }
@@ -1087,7 +1088,7 @@ class Store {
 
   updateBlock(id: string, updates: Partial<Block>): void {
     this.batch(() => {
-      this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates } : b);
+      this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates, _v: Date.now() } : b);
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
       const block = this.blocks.find(b => b.id === id);
@@ -1137,7 +1138,7 @@ class Store {
       this.tasks = [];
       saveToStorage(STORAGE_KEYS.tasks, this.tasks);
       this.blocks = this.blocks.map(b =>
-        b.taskId ? { ...b, taskId: undefined, task: undefined } : b
+        b.taskId ? { ...b, taskId: undefined, task: undefined, _v: Date.now() } : b
       );
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
