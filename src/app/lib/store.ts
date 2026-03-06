@@ -325,7 +325,16 @@ const SESSIONS_PER_WEEK: Record<Difficulty, number> = {
  * - Perfil aprendido: categorías con bajo rendimiento se priorizan más
  */
 function calculateTaskUrgency(task: Task, referenceDate: string, profile?: LearnedProfile | null): number {
-  if (!task.dueDate || task.status === 'terminada') return -1;
+  if (task.status === 'terminada') return -1;
+
+  // Tareas sin fecha: urgencia base según dificultad y estado
+  if (!task.dueDate) {
+    let base = task.difficulty === 'high' ? 3 : task.difficulty === 'medium' ? 2 : 1;
+    // En progreso → un poco más de prioridad
+    if (task.status === 'en-progreso' || task.status === 'en-progreso-aplazada') base += 2;
+    if (profile) base *= getCategoryBonus(profile, task);
+    return base;
+  }
 
   const dueStr = task.dueDate.split('T')[0];
   const ref = new Date(referenceDate + 'T12:00:00');
@@ -763,15 +772,14 @@ class Store {
       t.dueDate && shouldScheduleTaskOnDay(t, date)
     );
 
-    // Tareas sin fecha pero en progreso (repaso/personales activas)
-    const inProgressNoDate = activeTasks.filter(t =>
-      !t.dueDate && (t.status === 'en-progreso' || t.status === 'en-progreso-aplazada')
-    );
+    // Tareas sin fecha de entrega: incluir todas las activas para que
+    // se asignen a bloques profundos disponibles
+    const noDateTasks = activeTasks.filter(t => !t.dueDate);
 
     // Deduplicar
     const seen = new Set<string>();
     const all: Task[] = [];
-    for (const t of [...schedulable, ...inProgressNoDate]) {
+    for (const t of [...schedulable, ...noDateTasks]) {
       if (!seen.has(t.id)) {
         seen.add(t.id);
         all.push(t);
