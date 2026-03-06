@@ -36,6 +36,7 @@ export function Planner() {
   const [activeTab, setActiveTab] = useState<'blocks' | 'tasks'>('blocks');
   const [editingBlock, setEditingBlock] = useState<Block | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editingTaskDeliverable, setEditingTaskDeliverable] = useState(false);
   const [showSmartImport, setShowSmartImport] = useState(false);
   const [smartText, setSmartText] = useState('');
   const [smartItems, setSmartItems] = useState<ParsedItem[] | null>(null);
@@ -294,7 +295,7 @@ export function Planner() {
     e.preventDefault();
     if (!editingTask) return;
     const fd = new FormData(e.currentTarget);
-    const isDeliverable = fd.get('isDeliverable') === 'on';
+    const isDeliverable = editingTaskDeliverable;
     const newDueDate = (fd.get('dueDate') as string ?? '').trim();
     if (isDeliverable && !newDueDate) return;
     const subtasksRaw = (fd.get('subtasks') as string ?? '').trim();
@@ -1274,7 +1275,7 @@ export function Planner() {
                 <select name="taskId"
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500">
                   <option value="">Sin tarea</option>
-                  {tasks.map((task) => (
+                  {allTasks.map((task) => (
                     <option key={task.id} value={task.id}>{task.subject}</option>
                   ))}
                 </select>
@@ -1312,7 +1313,7 @@ export function Planner() {
               <h3 className="text-xl font-bold">Importar con IA</h3>
             </div>
             <p className="text-zinc-500 text-sm mb-4">
-              <span className="text-green-500">DeepSeek · deepseek-chat (V3)</span>
+              Clasificación automática por palabras clave
             </p>
 
             {/* Step 1 — Input */}
@@ -1449,22 +1450,26 @@ export function Planner() {
               <div>
                 <label className="block text-sm text-zinc-400 mb-2">Tipo de tarea</label>
                 <div className="flex rounded-xl overflow-hidden border border-zinc-700">
-                  <label className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer ${
-                    'peer-checked:bg-purple-600'
-                  }`}>
-                    <input type="radio" name="isDeliverable" value="on" defaultChecked={editingTask.isDeliverable ?? false}
-                      className="sr-only peer" />
-                    <span className="flex items-center gap-1.5 peer-checked:text-white">
-                      <Package className="size-4" /> Entregable
-                    </span>
-                  </label>
-                  <label className="flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer">
-                    <input type="radio" name="isDeliverable" value="off" defaultChecked={!(editingTask.isDeliverable ?? false)}
-                      className="sr-only peer" />
-                    <span className="flex items-center gap-1.5 peer-checked:text-white">
-                      <BookOpen className="size-4" /> Personal
-                    </span>
-                  </label>
+                  <button type="button"
+                    onClick={() => setEditingTaskDeliverable(true)}
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      editingTaskDeliverable
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    <Package className="size-4" /> Entregable
+                  </button>
+                  <button type="button"
+                    onClick={() => setEditingTaskDeliverable(false)}
+                    className={`flex-1 py-3 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5 ${
+                      !editingTaskDeliverable
+                        ? 'bg-teal-600 text-white'
+                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                    }`}
+                  >
+                    <BookOpen className="size-4" /> Personal
+                  </button>
                 </div>
               </div>
               <div>
@@ -1510,7 +1515,7 @@ export function Planner() {
                 </select>
               </div>
               <div className="flex gap-3 pt-1">
-                <button type="button" onClick={() => setEditingTask(null)}
+                <button type="button" onClick={() => { setEditingTask(null); setEditingTaskDeliverable(false); }}
                   className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold transition-colors">
                   Cancelar
                 </button>
@@ -1563,7 +1568,7 @@ export function Planner() {
                 <select name="taskId" defaultValue={editingBlock.taskId ?? ''}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500">
                   <option value="">Sin tarea</option>
-                  {tasks.map((task) => (
+                  {allTasks.map((task) => (
                     <option key={task.id} value={task.id}>{task.subject}</option>
                   ))}
                 </select>

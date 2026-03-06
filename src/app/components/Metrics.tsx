@@ -23,14 +23,20 @@ export function Metrics() {
 
       setMetrics(generated);
 
-      // Calculate streak: consecutive days ending today with score >= 85
+      // Calcular racha: días CALENDARIOS consecutivos (no solo entradas de array)
+      // que terminen en hoy y tengan score >= 85
       let streak = 0;
-      const sorted = [...generated].sort((a, b) => b.date.localeCompare(a.date));
-      for (const m of sorted) {
-        if (m.disciplineScore >= 85) {
+      const scoreByDate = new Map(generated.map(m => [m.date, m.disciplineScore]));
+      // Iterar hacia atrás desde hoy
+      const cursor = new Date(todayString + 'T12:00:00');
+      while (true) {
+        const dayStr = dateToStr(cursor);
+        const score = scoreByDate.get(dayStr);
+        if (score !== undefined && score >= 85) {
           streak++;
+          cursor.setDate(cursor.getDate() - 1);
         } else {
-          break;
+          break; // día sin datos o score < 85 → racha rota
         }
       }
       setCurrentStreak(streak);

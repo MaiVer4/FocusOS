@@ -565,7 +565,16 @@ class Store {
   addTask(task: Task): void {
     this.tasks = [...this.tasks, { ...task, _v: Date.now() } as Task];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
-    this.autoAssignBlock(task);
+    if (task.dueDate) {
+      // Tarea con fecha: crear bloque nuevo si es urgente hoy
+      this.autoAssignBlock(task);
+    } else {
+      // Tarea sin fecha: asignarla a bloques libres existentes de hoy
+      const today = todayStr();
+      if (this.getBlocks(today).length > 0) {
+        this.assignUnblockedTasks(today);
+      }
+    }
   }
 
   /**
@@ -1010,7 +1019,7 @@ class Store {
       // Cerrar brecha: si hay un hueco entre el bloque anterior y este, pegarlo
       if (prevEnd && prevEnd < candidate) {
         // Verificar que no haya un bloque fijo en medio
-        const gapOccupied = allPlaced.some(occ => occ.start >= prevEnd! && occ.start < candidate);
+        const gapOccupied = allPlaced.some(occ => occ.start > prevEnd! && occ.start < candidate);
         if (!gapOccupied) {
           candidate = prevEnd;
         }
@@ -1216,6 +1225,8 @@ class Store {
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(this.settings));
     // Subir inmediatamente a la nube (sin debounce) para evitar pérdida al refrescar
     cloudSync.uploadImmediate('settings', this.settings);
+    // Notificar a suscriptores (Home.appName, etc.)
+    this.scheduleNotify();
     if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined) {
       resetAIClient();
     }

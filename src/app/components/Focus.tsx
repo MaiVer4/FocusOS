@@ -29,6 +29,7 @@ export function Focus() {
   useEffect(() => {
     const block = store.getCurrentBlock();
     setCurrentBlock(block);
+    setBlockFinished(false); // resetear al cambiar de bloque
 
     if (!block) return;
 

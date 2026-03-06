@@ -25,6 +25,15 @@ export function Settings() {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    // Validaciones de coherencia
+    if (settings.wakeTime >= settings.sleepTime) {
+      alert('La hora de despertar debe ser anterior a la hora de dormir.');
+      return;
+    }
+    if (settings.dailyDeepBlocksMin > settings.dailyDeepBlocksMax) {
+      alert('El mínimo de bloques profundos no puede ser mayor que el máximo.');
+      return;
+    }
     store.updateSettings(settings);
     setSaved(true);
     setTimeout(() => setSaved(false), 2500);
