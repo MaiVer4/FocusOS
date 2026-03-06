@@ -326,6 +326,13 @@ class CloudSync {
         } else if (!this.connecting) {
           this.connect();
         }
+      } else {
+        // Pestaña se oculta (mobile va a background, cambio de tab, etc.)
+        // Flush INMEDIATO: cancelar debounces y subir todo antes de que
+        // el browser suspenda/mate los timers.
+        if (this.active) {
+          this.flushNow();
+        }
       }
     });
 
@@ -393,11 +400,11 @@ class CloudSync {
     this.connecting = true;
     this.setStatus('connecting');
 
-    // Descartar uploads pre-connection (datos del constructor del Store,
-    // posiblemente obsoletos — initialSync decidirá qué es correcto)
+    // Cancelar debounce timers (initialSync decidirá qué es correcto)
+    // PERO preservar pendingUploads — initialSync los reconciliará y
+    // flushPending los subirá después si siguen siendo relevantes.
     for (const timer of Object.values(this.debounceTimers)) clearTimeout(timer);
     this.debounceTimers = {};
-    this.pendingUploads = {};
 
     try {
       // 1) Preferir sesión Firebase ya restaurada
@@ -566,6 +573,21 @@ class CloudSync {
       await this.doUpload(collection);
     }
     if (this.active) this.setStatus('connected');
+  }
+
+  /**
+   * Flush síncrono: cancela todos los debounce timers pendientes y sube
+   * inmediatamente. Usado al ocultar la pestaña para que los datos
+   * se suban antes de que el browser suspenda los timers (crítico en mobile).
+   */
+  private flushNow(): void {
+    // Cancelar todos los debounce timers activos
+    for (const [collection, timer] of Object.entries(this.debounceTimers)) {
+      clearTimeout(timer);
+      delete this.debounceTimers[collection];
+    }
+    // Subir todo lo pendiente
+    this.flushPending();
   }
 
   // ── Sync inicial ───────────────────────────────────────────────────────
