@@ -64,56 +64,59 @@ export function Root() {
   const StatusIcon = cfg.icon;
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col max-w-md mx-auto relative">
-      {/* Sync indicator — slides down/up */}
+    <div className="min-h-screen bg-zinc-950 text-white flex flex-col max-w-md mx-auto relative overflow-x-hidden">
+      {/* Sync indicator — Modern Pill */}
       <div
-        className={`sticky top-0 z-20 transition-all duration-500 ease-out overflow-hidden ${
-          showBar ? 'max-h-10 opacity-100' : 'max-h-0 opacity-0'
+        className={`sticky top-2 z-50 px-4 transition-all duration-500 ease-out ${
+          showBar ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'
         }`}
       >
-        <div className={`relative px-4 py-1.5 bg-gradient-to-b ${cfg.bgGlow} backdrop-blur-md border-b border-white/[0.06]`}>
-          <div className="flex items-center justify-center gap-2">
-            {/* Animated dot */}
-            <span className="relative flex h-2 w-2">
-              {cfg.pulse && (
-                <span className={`absolute inset-0 rounded-full ${cfg.colors.replace('text-', 'bg-')} opacity-75 animate-ping`} />
-              )}
-              <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.colors.replace('text-', 'bg-')}`} />
-            </span>
+        <div className="mx-auto max-w-fit px-3 py-1 glass-card rounded-full shadow-lg border border-white/10 flex items-center gap-2">
+          {/* Animated dot */}
+          <span className="relative flex h-2 w-2">
+            {cfg.pulse && (
+              <span className={`absolute inset-0 rounded-full ${cfg.colors.replace('text-', 'bg-')} opacity-75 animate-ping`} />
+            )}
+            <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.colors.replace('text-', 'bg-')}`} />
+          </span>
 
-            {/* Icon */}
-            <StatusIcon className={`size-3.5 ${cfg.colors} ${cfg.pulse ? 'animate-spin' : ''}`} />
+          {/* Icon */}
+          <StatusIcon className={`size-3.5 ${cfg.colors} ${cfg.pulse ? 'animate-spin' : ''}`} />
 
-            {/* Label */}
-            <span className={`text-[11px] font-medium tracking-wide uppercase ${cfg.colors}`}>
-              {cfg.label}
-            </span>
-          </div>
+          {/* Label */}
+          <span className={`text-[11px] font-semibold tracking-wider uppercase ${cfg.colors}`}>
+            {cfg.label}
+          </span>
         </div>
       </div>
 
-      <main className="flex-1 overflow-auto pb-20 min-h-0">
+      <main className="flex-1 overflow-auto pb-28 min-h-0">
         <Outlet />
       </main>
 
-      {/* Bottom Navigation */}
-      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto bg-zinc-900/95 backdrop-blur-sm border-t border-zinc-800">
-        <div className="flex items-center justify-around h-16">
-          {NAV_ITEMS.map(({ to, icon: Icon, label }) => (
-            <Link
-              key={to}
-              to={to}
-              className={`flex flex-col items-center gap-1 px-3 py-2 transition-colors min-w-0 ${
-                isActive(to) ? 'text-red-500' : 'text-zinc-500 hover:text-zinc-300'
-              }`}
-            >
-              <Icon className="size-5 flex-shrink-0" />
-              <span className="text-xs truncate">{label}</span>
-              {isActive(to) && (
-                <span className="absolute bottom-0 w-6 h-0.5 bg-red-500 rounded-full" />
-              )}
-            </Link>
-          ))}
+      {/* Floating Glassmorphism Bottom Dock */}
+      <nav className="fixed bottom-3 left-3 right-3 max-w-md mx-auto z-40">
+        <div className="glass-dock rounded-2xl p-1.5 flex items-center justify-between border border-white/[0.08] shadow-2xl">
+          {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
+            const active = isActive(to);
+            return (
+              <Link
+                key={to}
+                to={to}
+                className={`relative flex flex-col items-center justify-center gap-0.5 py-2 px-3 rounded-xl transition-all duration-200 min-w-0 flex-1 ${
+                  active
+                    ? 'bg-red-500/15 text-red-400 font-semibold border border-red-500/25 shadow-inner glow-red'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03] active:scale-95'
+                }`}
+              >
+                <Icon className={`size-5 transition-transform duration-200 ${active ? 'scale-110 text-red-400' : ''}`} />
+                <span className="text-[10px] tracking-tight truncate">{label}</span>
+                {active && (
+                  <span className="absolute -bottom-1 w-1 h-1 bg-red-400 rounded-full animate-pulse" />
+                )}
+              </Link>
+            );
+          })}
         </div>
       </nav>
     </div>
