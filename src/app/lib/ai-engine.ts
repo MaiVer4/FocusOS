@@ -42,15 +42,26 @@ export interface AIDailySummary {
 
 // ─── Config por proveedor ────────────────────────────────────────────────────
 
-const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'];
+const GROQ_MODELS = [
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
+  'llama-3.1-70b-versatile',
+  'gemma2-9b-it',
+];
 const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ─── Utilidades ──────────────────────────────────────────────────────────────
 
-/** Elimina caracteres invisibles de la API key */
+/** Elimina caracteres invisibles, prefijos "Bearer" o comillas accidentales de la API key */
 export function sanitizeApiKey(key: string): string {
-  return key.replace(/[^\x20-\x7E]/g, '').trim();
+  if (!key) return '';
+  return key
+    .trim()
+    .replace(/^["']|["']$/g, '')
+    .replace(/^Bearer\s+/i, '')
+    .replace(/[^\x20-\x7E]/g, '')
+    .trim();
 }
 
 let _geminiClient: GoogleGenerativeAI | null = null;
@@ -435,19 +446,70 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 }
 
 /**
- * Valida que una API key funciona.
+ * Valida que una API key funciona correctamente.
+ * Retorna { valid: boolean, error?: string }.
  */
-export async function validateApiKey(provider: AIProvider, apiKey: string): Promise<boolean> {
-  try {
-    const text = await generate(provider, apiKey, 'Responde solo: hola');
-    return text.length > 0;
-  } catch (err: any) {
-    const msg = err?.message ?? '';
-    if (msg.includes('429') || msg.includes('quota') || msg.includes('rate')) {
-      console.warn('[AI] Key válida, cuota temporal agotada');
-      return true;
-    }
-    console.error('[AI] Error validando key:', err);
-    return false;
+export async function validateApiKey(
+  provider: AIProvider,
+  apiKey: string
+): Promise<{ valid: boolean; error?: string }> {
+  const key = sanitizeApiKey(apiKey);
+  if (!key || key.length < 8) {
+    return { valid: false, error: 'La API key ingresada es demasiado corta' };
   }
+
+  if (provider === 'groq') {
+    try {
+      // 1. Verificación directa mediante listado de modelos de Groq (rápido y confiable)
+      const res = await fetch('https://api.groq.com/openai/v1/models', {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${key}`,
+        },
+      });
+
+      if (res.ok) {
+        return { valid: true };
+      }
+
+      if (res.status === 401) {
+        return { valid: false, error: 'API Key de Groq inválida. Verifica que comience con gsk_' };
+      }
+
+      if (res.status === 429) {
+        // Rate limit temporal: la key es válida
+        return { valid: true };
+      }
+
+      const errData = await res.json().catch(() => null);
+      const errMsg = errData?.error?.message || `Error Groq (${res.status})`;
+      return { valid: false, error: errMsg };
+    } catch (fetchErr: any) {
+      // Fallback: Si GET /models falló por red, intentar un chat completion mínimo
+      try {
+        const text = await groqGenerate(key, 'ping');
+        if (text && text.length > 0) return { valid: true };
+      } catch (err: any) {
+        const msg = err?.message ?? '';
+        if (msg.includes('429') || msg.includes('rate') || msg.includes('quota')) {
+          return { valid: true };
+        }
+        return { valid: false, error: msg || 'No se pudo conectar con los servidores de Groq' };
+      }
+    }
+  } else {
+    // Proveedor Gemini
+    try {
+      const text = await geminiGenerate(key, 'ping');
+      return { valid: text.length > 0 };
+    } catch (err: any) {
+      const msg = err?.message ?? '';
+      if (msg.includes('429') || msg.includes('quota') || msg.includes('rate')) {
+        return { valid: true };
+      }
+      return { valid: false, error: msg || 'API Key de Gemini inválida' };
+    }
+  }
+
+  return { valid: false, error: 'No se pudo verificar la API key' };
 }

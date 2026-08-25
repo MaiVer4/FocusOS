@@ -13,6 +13,7 @@ export function Settings() {
   const [showApiKey, setShowApiKey] = useState(false);
   const [validatingKey, setValidatingKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
+  const [keyError, setKeyError] = useState<string | null>(null);
 
   useEffect(() => {
     setNotificationsEnabled(notificationService.hasPermission());
@@ -397,38 +398,53 @@ export function Settings() {
 
           {/* Validate Button */}
           {(settings.aiApiKey ?? '').trim().length > 5 && (
-            <button
-              type="button"
-              disabled={validatingKey}
-              onClick={async () => {
-                setValidatingKey(true);
-                setKeyStatus('idle');
-                try {
-                  const provider: AIProvider = settings.aiProvider ?? 'groq';
-                  const key = settings.aiApiKey ?? '';
-                  const valid = await validateApiKey(provider, key);
-                  setKeyStatus(valid ? 'valid' : 'invalid');
-                  if (valid) {
-                    store.updateSettings(settings);
+            <div className="space-y-2">
+              <button
+                type="button"
+                disabled={validatingKey}
+                onClick={async () => {
+                  setValidatingKey(true);
+                  setKeyStatus('idle');
+                  setKeyError(null);
+                  try {
+                    const provider: AIProvider = settings.aiProvider ?? 'groq';
+                    const key = settings.aiApiKey ?? '';
+                    const res = await validateApiKey(provider, key);
+                    if (res.valid) {
+                      setKeyStatus('valid');
+                      setKeyError(null);
+                      store.updateSettings(settings);
+                    } else {
+                      setKeyStatus('invalid');
+                      setKeyError(res.error || 'La clave proporcionada no es válida');
+                    }
+                  } catch (err: any) {
+                    console.error('Error validando:', err);
+                    setKeyStatus('invalid');
+                    setKeyError(err?.message || 'Error al conectar con el servidor');
                   }
-                } catch (err) {
-                  console.error('Error validando:', err);
-                  setKeyStatus('invalid');
-                }
-                setValidatingKey(false);
-              }}
-              className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
-            >
-              {validatingKey ? (
-                <><Loader2 className="size-4 animate-spin" /> Validando...</>
-              ) : keyStatus === 'valid' ? (
-                <span className="text-green-400">✓ Conexión exitosa</span>
-              ) : keyStatus === 'invalid' ? (
-                <span className="text-red-400">✗ Key inválida o error de conexión</span>
-              ) : (
-                <><Brain className="size-4" /> Verificar conexión</>
+                  setValidatingKey(false);
+                }}
+                className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
+              >
+                {validatingKey ? (
+                  <><Loader2 className="size-4 animate-spin" /> Validando clave con {settings.aiProvider === 'gemini' ? 'Google' : 'Groq'}...</>
+                ) : keyStatus === 'valid' ? (
+                  <span className="text-green-300 font-semibold">✓ Conexión exitosa y verificada</span>
+                ) : keyStatus === 'invalid' ? (
+                  <span className="text-red-300 font-semibold">✗ Clave no válida</span>
+                ) : (
+                  <><Brain className="size-4" /> Verificar conexión</>
+                )}
+              </button>
+
+              {keyError && (
+                <div className="p-3 bg-red-950/40 border border-red-500/30 rounded-xl text-xs text-red-300 flex items-start gap-2">
+                  <span className="font-bold">⚠️ Error:</span>
+                  <span>{keyError}</span>
+                </div>
               )}
-            </button>
+            </div>
           )}
 
           {store.isAIEnabled() && (
