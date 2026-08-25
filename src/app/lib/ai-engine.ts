@@ -43,9 +43,11 @@ export interface AIDailySummary {
 // ─── Config por proveedor ────────────────────────────────────────────────────
 
 const GROQ_MODELS = [
-  'llama-3.3-70b-versatile',
   'llama-3.1-8b-instant',
+  'llama-3.3-70b-versatile',
   'llama-3.1-70b-versatile',
+  'llama3-70b-8192',
+  'llama3-8b-8192',
   'gemma2-9b-it',
 ];
 const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
@@ -99,20 +101,30 @@ async function groqGenerate(apiKey: string, prompt: string): Promise<string> {
 
       if (!res.ok) {
         const errBody = await res.text();
-        if (res.status === 429 || res.status === 503) {
-          console.warn(`[AI] Groq ${model} rate limited, probando siguiente...`);
-          lastError = new Error(`${res.status}: ${errBody}`);
+        // Si el modelo no existe (404), está saturado (429), en mantenimiento (503) o con formato no soportado (400), probar siguiente
+        if (res.status === 404 || res.status === 429 || res.status === 503 || res.status === 400) {
+          console.warn(`[AI] Groq modelo "${model}" no disponible (${res.status}), probando siguiente modelo...`);
+          lastError = new Error(`Groq ${res.status}: ${errBody}`);
           continue;
         }
         throw new Error(`Groq ${res.status}: ${errBody}`);
       }
 
       const data = await res.json();
-      return data.choices?.[0]?.message?.content ?? '';
+      const content = data.choices?.[0]?.message?.content ?? '';
+      if (content) return content;
     } catch (err: any) {
       lastError = err;
       const msg = err?.message ?? '';
-      if (msg.includes('429') || msg.includes('rate') || msg.includes('503')) {
+      // Continuar al siguiente modelo en caso de error recuperable
+      if (
+        msg.includes('404') ||
+        msg.includes('model_not_found') ||
+        msg.includes('429') ||
+        msg.includes('rate') ||
+        msg.includes('503') ||
+        msg.includes('400')
+      ) {
         continue;
       }
       throw err;
