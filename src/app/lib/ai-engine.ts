@@ -42,13 +42,12 @@ export interface AIDailySummary {
 
 // ─── Config por proveedor ────────────────────────────────────────────────────
 
-const GROQ_MODELS = [
+const FALLBACK_GROQ_MODELS = [
   'llama-3.1-8b-instant',
+  'openai/gpt-oss-120b',
+  'openai/gpt-oss-20b',
   'llama-3.3-70b-versatile',
-  'llama-3.1-70b-versatile',
-  'llama3-70b-8192',
-  'llama3-8b-8192',
-  'gemma2-9b-it',
+  'qwen/qwen3.6-27b',
 ];
 const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
@@ -66,6 +65,63 @@ export function sanitizeApiKey(key: string): string {
     .trim();
 }
 
+/** Filtra y ordena modelos activos de Groq para chat, ignorando modelos deprecados o de audio */
+function filterChatModels(models: string[]): string[] {
+  const preferred = [
+    'llama-3.1-8b-instant',
+    'openai/gpt-oss-120b',
+    'openai/gpt-oss-20b',
+    'llama-3.3-70b-versatile',
+    'qwen/qwen3.6-27b',
+  ];
+  const excluded = [
+    'whisper',
+    'llama-prompt-guard',
+    'canopylabs',
+    'safeguard',
+    'orpheus',
+    'gemma2-9b-it',
+    'llama3-8b-8192',
+    'llama3-70b-8192',
+    'mixtral-8x7b-32768',
+  ];
+
+  const valid = models.filter((id) => !excluded.some((e) => id.toLowerCase().includes(e)));
+
+  valid.sort((a, b) => {
+    const idxA = preferred.indexOf(a);
+    const idxB = preferred.indexOf(b);
+    if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+    if (idxA !== -1) return -1;
+    if (idxB !== -1) return 1;
+    return 0;
+  });
+
+  return valid;
+}
+
+/** Extrae y sanitiza JSON de respuestas de IA, removiendo tags de pensamiento <think> y markdown */
+export function extractJSON<T = any>(raw: string): T {
+  let cleaned = raw.trim();
+  // Quitar bloques de pensamiento <think>...</think>
+  cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  // Quitar markdown ```json ... ```
+  cleaned = cleaned
+    .replace(/^```json\s*/i, '')
+    .replace(/^```\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  // Aislar el objeto JSON delimitado por '{' y '}'
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
+    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+  }
+
+  return JSON.parse(cleaned);
+}
+
 let _geminiClient: GoogleGenerativeAI | null = null;
 let _geminiClientKey: string | null = null;
 
@@ -74,63 +130,75 @@ export function resetAIClient(): void {
   _geminiClientKey = null;
 }
 
-// ─── Groq (OpenAI-compatible REST) ───────────────────────────────────────────
+// ─── Groq (OpenAI-compatible REST con Auto-Discovery) ────────────────────────
 
 async function groqGenerate(apiKey: string, prompt: string): Promise<string> {
   const key = sanitizeApiKey(apiKey);
+  let candidateModels = [...FALLBACK_GROQ_MODELS];
+
+  // 1. Intentar descubrir dinámicamente qué modelos están activos para esta key
+  try {
+    const modelsRes = await fetch('https://api.groq.com/openai/v1/models', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    if (modelsRes.ok) {
+      const data = await modelsRes.json();
+      if (Array.isArray(data.data) && data.data.length > 0) {
+        const availableIds = data.data.map((m: any) => m.id as string);
+        const discovered = filterChatModels(availableIds);
+        if (discovered.length > 0) {
+          candidateModels = discovered;
+        }
+      }
+    }
+  } catch {
+    // Si falla la consulta de modelos, continuar con la lista estática
+  }
+
   let lastError: any = null;
 
-  for (const model of GROQ_MODELS) {
+  for (const model of candidateModels) {
     try {
       const res = await fetch(GROQ_API_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${key}`,
+          Authorization: `Bearer ${key}`,
         },
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: 'Eres un asistente experto en productividad. Siempre respondes en JSON válido sin markdown ni backticks.' },
+            {
+              role: 'system',
+              content:
+                'Eres un asistente experto en productividad y organización. Responde única y exclusivamente con un objeto JSON válido, sin explicaciones ni markdown.',
+            },
             { role: 'user', content: prompt },
           ],
-          temperature: 0.7,
+          temperature: 0.6,
           max_tokens: 4096,
         }),
       });
 
       if (!res.ok) {
         const errBody = await res.text();
-        // Si el modelo no existe (404), está saturado (429), en mantenimiento (503) o con formato no soportado (400), probar siguiente
-        if (res.status === 404 || res.status === 429 || res.status === 503 || res.status === 400) {
-          console.warn(`[AI] Groq modelo "${model}" no disponible (${res.status}), probando siguiente modelo...`);
-          lastError = new Error(`Groq ${res.status}: ${errBody}`);
-          continue;
-        }
-        throw new Error(`Groq ${res.status}: ${errBody}`);
+        console.warn(`[AI] Groq modelo "${model}" error (${res.status}):`, errBody);
+        lastError = new Error(`Groq ${res.status}: ${errBody}`);
+        // Probar siguiente modelo para cualquier error recuperable
+        continue;
       }
 
       const data = await res.json();
       const content = data.choices?.[0]?.message?.content ?? '';
-      if (content) return content;
+      if (content && content.trim().length > 0) return content;
     } catch (err: any) {
       lastError = err;
-      const msg = err?.message ?? '';
-      // Continuar al siguiente modelo en caso de error recuperable
-      if (
-        msg.includes('404') ||
-        msg.includes('model_not_found') ||
-        msg.includes('429') ||
-        msg.includes('rate') ||
-        msg.includes('503') ||
-        msg.includes('400')
-      ) {
-        continue;
-      }
-      throw err;
+      console.warn(`[AI] Excepción con modelo Groq "${model}":`, err?.message);
+      continue;
     }
   }
-  throw lastError ?? new Error('Todos los modelos Groq fallaron.');
+  throw lastError ?? new Error('No se pudo generar respuesta con ningún modelo disponible en Groq.');
 }
 
 // ─── Gemini ──────────────────────────────────────────────────────────────────
@@ -332,10 +400,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 
   try {
     const raw = await generate(provider, apiKey, prompt);
-    const cleaned = raw.trim()
-      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-
-    const parsed = JSON.parse(cleaned) as AIScheduleResult;
+    const parsed = extractJSON<AIScheduleResult>(raw);
     if (!Array.isArray(parsed.blocks)) throw new Error('Respuesta sin bloques válidos');
 
     // Validación de formato básico
@@ -448,9 +513,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 
   try {
     const raw = await generate(provider, apiKey, prompt);
-    const cleaned = raw.trim()
-      .replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/i, '').trim();
-    return JSON.parse(cleaned) as AIDailySummary;
+    return extractJSON<AIDailySummary>(raw);
   } catch (error: any) {
     console.error('Error resumen IA:', error);
     return { analysis: 'No se pudo analizar el día.', suggestions: [], productivityTips: [] };
