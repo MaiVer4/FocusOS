@@ -1,11 +1,21 @@
 @layer base {
   * {
     box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
   }
 
-  body {
+  html, body {
     @apply bg-zinc-950 text-white antialiased;
     font-size: 16px;
+    overscroll-behavior-y: contain;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Safe area insets for Android notch and navigation bar */
+  body {
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 
   /* Scrollbar styling for dark theme */
