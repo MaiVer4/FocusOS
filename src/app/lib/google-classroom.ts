@@ -58,13 +58,21 @@ export interface ClassroomTask {
 
 // ─── API Calls ────────────────────────────────────────────────────────────────
 
+// ─── API Calls ────────────────────────────────────────────────────────────────
+
 async function apiFetch<T>(url: string): Promise<T> {
   const token = googleAuth.getAccessToken();
-  if (!token) throw new Error('No autenticado con Google');
+  if (!token) throw new Error('No autenticado con Google. Por favor conéctate primero.');
 
   const res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (res.status === 401) {
+    // Token expirado o revocado
+    googleAuth.signOut();
+    throw new Error('La sesión de Google expiró. Por favor vuelve a conectar tu cuenta.');
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -74,96 +82,124 @@ async function apiFetch<T>(url: string): Promise<T> {
   return res.json();
 }
 
-/** Fetch que no lanza error en 403, retorna null */
+/** Fetch que no lanza error en 403 o 404, retorna null */
 async function apiFetchSafe<T>(url: string): Promise<T | null> {
   const token = googleAuth.getAccessToken();
   if (!token) return null;
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  if (!res.ok) return null;
-  return res.json();
-}
-
-/** Obtiene los cursos activos del usuario */
-export async function getCourses(): Promise<ClassroomCourse[]> {
-  const data = await apiFetch<{ courses?: ClassroomCourse[] }>(
-    `${BASE}/courses?courseStates=ACTIVE&pageSize=30`
-  );
-  return data.courses ?? [];
-}
-
-/** Obtiene las entregas del usuario en un curso (scope: student-submissions.me.readonly) */
-export async function getMySubmissions(courseId: string): Promise<ClassroomSubmission[]> {
-  const data = await apiFetch<{ studentSubmissions?: ClassroomSubmission[] }>(
-    `${BASE}/courses/${courseId}/courseWork/-/studentSubmissions?pageSize=100`
-  );
-  return data.studentSubmissions ?? [];
-}
-
-/** Intenta listar todo el coursework de un curso (batch, más eficiente) */
-async function listCoursework(courseId: string): Promise<ClassroomCoursework[]> {
   try {
-    const data = await apiFetch<{ courseWork?: ClassroomCoursework[] }>(
-      `${BASE}/courses/${courseId}/courseWork?pageSize=100`
-    );
-    return data.courseWork ?? [];
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    return res.json();
   } catch {
-    // Fallback: intentar con apiFetchSafe por si falla el scope
-    const data = await apiFetchSafe<{ courseWork?: ClassroomCoursework[] }>(
-      `${BASE}/courses/${courseId}/courseWork?pageSize=100`
-    );
-    return data?.courseWork ?? [];
+    return null;
   }
 }
 
+/** Obtiene los cursos activos del usuario (soporta rol estudiante y profesor) */
+export async function getCourses(): Promise<ClassroomCourse[]> {
+  try {
+    // Intentar primero lista general de cursos activos
+    const data = await apiFetch<{ courses?: ClassroomCourse[] }>(
+      `${BASE}/courses?courseStates=ACTIVE&pageSize=50`
+    );
+    if (data.courses && data.courses.length > 0) {
+      return data.courses;
+    }
+  } catch (err: any) {
+    console.warn('[Classroom] getCourses general failed, trying studentId=me fallback:', err);
+  }
+
+  // Fallback con studentId=me
+  const studentData = await apiFetchSafe<{ courses?: ClassroomCourse[] }>(
+    `${BASE}/courses?studentId=me&courseStates=ACTIVE&pageSize=50`
+  );
+  return studentData?.courses ?? [];
+}
+
+/** Obtiene las entregas del usuario en un curso */
+export async function getMySubmissions(courseId: string): Promise<ClassroomSubmission[]> {
+  // Intentar con wildcard de studentSubmissions
+  const data = await apiFetchSafe<{ studentSubmissions?: ClassroomSubmission[] }>(
+    `${BASE}/courses/${courseId}/courseWork/-/studentSubmissions?pageSize=100`
+  );
+  if (data?.studentSubmissions) return data.studentSubmissions;
+
+  // Fallback con userId=me
+  const dataMe = await apiFetchSafe<{ studentSubmissions?: ClassroomSubmission[] }>(
+    `${BASE}/courses/${courseId}/courseWork/-/studentSubmissions?userId=me&pageSize=100`
+  );
+  return dataMe?.studentSubmissions ?? [];
+}
+
+/** Intenta listar todo el coursework de un curso */
+export async function listCoursework(courseId: string): Promise<ClassroomCoursework[]> {
+  // 1. Intentar con filtro de solo publicados
+  const dataPublished = await apiFetchSafe<{ courseWork?: ClassroomCoursework[] }>(
+    `${BASE}/courses/${courseId}/courseWork?courseWorkStates=PUBLISHED&pageSize=100`
+  );
+  if (dataPublished?.courseWork && dataPublished.courseWork.length > 0) {
+    return dataPublished.courseWork;
+  }
+
+  // 2. Intentar sin filtro de estado
+  const dataAll = await apiFetchSafe<{ courseWork?: ClassroomCoursework[] }>(
+    `${BASE}/courses/${courseId}/courseWork?pageSize=100`
+  );
+  return dataAll?.courseWork ?? [];
+}
+
 /** Fallback: obtener un coursework individual */
-async function getCourseworkDetails(courseId: string, courseworkId: string): Promise<ClassroomCoursework | null> {
+export async function getCourseworkDetails(courseId: string, courseworkId: string): Promise<ClassroomCoursework | null> {
   return apiFetchSafe<ClassroomCoursework>(
     `${BASE}/courses/${courseId}/courseWork/${courseworkId}`
   );
 }
 
 /**
- * Obtiene las tareas pendientes de Classroom.
- * 1. Lista entregas del usuario y filtra SOLO pendientes ('NEW', 'CREATED', 'RECLAIMED_BY_STUDENT').
- *    Cualquier tarea entregada ('TURNED_IN') o calificada ('RETURNED') se excluye automáticamente.
- * 2. Aplica un filtro de ventana máxima de 40 días (ignora tareas cuya entrega o asignación exceda 40 días).
+ * Obtiene todas las tareas verdaderamente pendientes de Google Classroom.
+ * Estrategia Resiliente:
+ * 1. Para cada curso activo, obtiene tanto las tareas publicadas (courseWork) como el estado de entregas (submissions).
+ * 2. Compara el estado: si la tarea ya fue entregada ('TURNED_IN') o calificada ('RETURNED'), se ignora.
+ * 3. Si la tarea no tiene entrega registrada o su entrega está en estado 'NEW'/'CREATED'/'RECLAIMED_BY_STUDENT', se importa como pendiente.
+ * 4. Convierte las fechas de entrega a hora local de manera precisa.
  */
 export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
   const courses = await getCourses();
+  if (courses.length === 0) return [];
+
   const tasks: ClassroomTask[] = [];
-  const MAX_DAYS_WINDOW = 40;
-  const now = Date.now();
+  const processedCourseworkIds = new Set<string>();
 
   for (const course of courses) {
-    const submissions = await getMySubmissions(course.id);
+    // 1. Consultar tareas y entregas del curso en paralelo
+    const [allCoursework, submissions] = await Promise.all([
+      listCoursework(course.id),
+      getMySubmissions(course.id),
+    ]);
 
-    // Filtrar SOLO entregas verdaderamente pendientes (NO entregadas ni calificadas)
-    const pending = submissions.filter(
-      s => s.state === 'NEW' || s.state === 'CREATED' || s.state === 'RECLAIMED_BY_STUDENT'
-    );
+    // Mapa de entregas por courseWorkId
+    const subMap = new Map<string, ClassroomSubmission>();
+    for (const sub of submissions) {
+      if (sub.courseWorkId) subMap.set(sub.courseWorkId, sub);
+    }
 
-    if (pending.length === 0) continue;
+    // ─── CASO A: Tareas encontradas vía listCoursework ──────────────────────
+    for (const cw of allCoursework) {
+      if (!cw.id || processedCourseworkIds.has(cw.id)) continue;
 
-    // Cargar todo el coursework del curso en UNA llamada batch
-    const allCoursework = await listCoursework(course.id);
-    const cwMap = new Map<string, ClassroomCoursework>();
-    for (const cw of allCoursework) cwMap.set(cw.id, cw);
-
-    for (const sub of pending) {
-      // Buscar en el mapa batch, fallback a individual si no está
-      let cw = cwMap.get(sub.courseWorkId) ?? null;
-      if (!cw) {
-        cw = await getCourseworkDetails(course.id, sub.courseWorkId);
+      const sub = subMap.get(cw.id);
+      // Si la tarea fue entregada o devuelta calificada, no está pendiente
+      if (sub && (sub.state === 'TURNED_IN' || sub.state === 'RETURNED')) {
+        continue;
       }
 
-      if (!cw) continue;
+      processedCourseworkIds.add(cw.id);
 
       // Fecha de asignación
-      const rawCreation = cw.creationTime ?? sub.creationTime ?? '';
+      const rawCreation = cw.creationTime ?? sub?.creationTime ?? '';
       let assignedDate = '';
       if (rawCreation) {
         const d = new Date(rawCreation);
@@ -175,14 +211,11 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         }
       }
 
-      const title = cw.title;
-      const description = cw.description ?? '';
-
-      // Construir fecha de entrega convirtiendo UTC → hora local
+      // Fecha de entrega en hora local
       let dueDateStr = '';
       if (cw.dueDate) {
         const y = cw.dueDate.year;
-        const m = cw.dueDate.month - 1; // Date usa meses 0-indexed
+        const m = cw.dueDate.month - 1; // 0-indexed
         const d = cw.dueDate.day;
         const hh = cw.dueTime?.hours ?? 23;
         const mm = cw.dueTime?.minutes ?? 59;
@@ -197,28 +230,70 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         dueDateStr = `${localY}-${localM}-${localD}T${localHH}:${localMM}`;
       }
 
-      // ─── FILTRO 1: Ventana Máxima de 40 Días ────────────────────────────────
-      if (dueDateStr) {
-        const dueMs = new Date(dueDateStr).getTime();
-        const diffDays = (dueMs - now) / (1000 * 60 * 60 * 24);
-        // Excluir si la fecha de entrega excede +40 días en el futuro o -40 días en el pasado
-        if (diffDays > MAX_DAYS_WINDOW || diffDays < -MAX_DAYS_WINDOW) continue;
-      } else if (assignedDate) {
-        const assignMs = new Date(assignedDate + 'T00:00:00').getTime();
-        const diffDaysAssigned = (now - assignMs) / (1000 * 60 * 60 * 24);
-        // Excluir si la tarea fue asignada hace más de 40 días
-        if (diffDaysAssigned > MAX_DAYS_WINDOW) continue;
+      tasks.push({
+        courseId: course.id,
+        courseName: course.name,
+        courseworkId: cw.id,
+        title: cw.title || 'Tarea de Classroom',
+        description: cw.description ?? '',
+        dueDate: dueDateStr,
+        assignedDate,
+        isDeliverable: true,
+        submitted: false,
+        selected: true,
+      });
+    }
+
+    // ─── CASO B: Fallback para submissions sin coursework en lote ──────────
+    const pendingSubs = submissions.filter(
+      (s) =>
+        s.courseWorkId &&
+        !processedCourseworkIds.has(s.courseWorkId) &&
+        (s.state === 'NEW' || s.state === 'CREATED' || s.state === 'RECLAIMED_BY_STUDENT')
+    );
+
+    for (const sub of pendingSubs) {
+      const cw = await getCourseworkDetails(course.id, sub.courseWorkId);
+      if (!cw || processedCourseworkIds.has(cw.id)) continue;
+
+      processedCourseworkIds.add(cw.id);
+
+      const rawCreation = cw.creationTime ?? sub.creationTime ?? '';
+      let assignedDate = '';
+      if (rawCreation) {
+        const d = new Date(rawCreation);
+        if (!isNaN(d.getTime())) {
+          const yy = d.getFullYear();
+          const mm = String(d.getMonth() + 1).padStart(2, '0');
+          const dd = String(d.getDate()).padStart(2, '0');
+          assignedDate = `${yy}-${mm}-${dd}`;
+        }
       }
 
-      // Evitar duplicados en la lista de importación
-      if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
+      let dueDateStr = '';
+      if (cw.dueDate) {
+        const y = cw.dueDate.year;
+        const m = cw.dueDate.month - 1;
+        const d = cw.dueDate.day;
+        const hh = cw.dueTime?.hours ?? 23;
+        const mm = cw.dueTime?.minutes ?? 59;
+
+        const utcDate = new Date(Date.UTC(y, m, d, hh, mm, 0));
+        const localY = utcDate.getFullYear();
+        const localM = String(utcDate.getMonth() + 1).padStart(2, '0');
+        const localD = String(utcDate.getDate()).padStart(2, '0');
+        const localHH = String(utcDate.getHours()).padStart(2, '0');
+        const localMM = String(utcDate.getMinutes()).padStart(2, '0');
+
+        dueDateStr = `${localY}-${localM}-${localD}T${localHH}:${localMM}`;
+      }
 
       tasks.push({
         courseId: course.id,
         courseName: course.name,
-        courseworkId: sub.courseWorkId,
-        title,
-        description,
+        courseworkId: cw.id,
+        title: cw.title || 'Tarea de Classroom',
+        description: cw.description ?? '',
         dueDate: dueDateStr,
         assignedDate,
         isDeliverable: true,
@@ -228,6 +303,13 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
     }
   }
 
-  tasks.sort((a, b) => a.dueDate.localeCompare(b.dueDate));
+  // Ordenar: primero las que tienen fecha de entrega más próxima, luego las sin fecha
+  tasks.sort((a, b) => {
+    if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate);
+    if (a.dueDate) return -1;
+    if (b.dueDate) return 1;
+    return b.assignedDate.localeCompare(a.assignedDate);
+  });
+
   return tasks;
 }

@@ -21,28 +21,26 @@ export function ClassroomModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleFetch = async () => {
+  const handleFetch = async (forceReauth = false) => {
     setLoading(true);
     setError(null);
     setTasks([]);
     try {
-      if (!googleAuth.isAuthenticated()) {
+      if (!googleAuth.isAuthenticated() || forceReauth) {
         await googleAuth.authenticate(true);
         onConnectedChange(true);
       }
       const fetched = await getClassroomPendingTasks();
       if (fetched.length === 0) {
-        setError('No se encontraron tareas pendientes en tus cursos.');
+        setError('No se encontraron tareas pendientes en tus cursos activos (todas las tareas están entregadas o no hay asignaciones pendientes).');
       }
       setTasks(fetched);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Error desconocido';
-      if (msg.includes('403')) {
+      if (msg.includes('403') || msg.includes('Permiso')) {
         setError(
-          'Permiso denegado. Verifica en Google Cloud Console:\n' +
-          '1. Que la API "Google Classroom API" esté habilitada\n' +
-          '2. Que los scopes estén en la pantalla de consentimiento OAuth\n' +
-          '3. Que aceptaste todos los permisos solicitados'
+          'Permisos de Classroom insuficientes o no autorizados.\n' +
+          'Haz clic en "Reconectar con Permisos" para conceder acceso completo a tus tareas y entregas.'
         );
       } else {
         setError(msg);
@@ -113,7 +111,7 @@ export function ClassroomModal({
               </button>
               <button
                 type="button"
-                onClick={handleFetch}
+                onClick={() => handleFetch(false)}
                 className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
               >
                 <GraduationCap className="size-4" /> {connected ? 'Obtener tareas' : 'Conectar'}
@@ -146,10 +144,10 @@ export function ClassroomModal({
               </button>
               <button
                 type="button"
-                onClick={handleFetch}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors"
+                onClick={() => handleFetch(true)}
+                className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-1.5"
               >
-                Reintentar
+                <GraduationCap className="size-4" /> Reintentar / Reconectar
               </button>
             </div>
           </div>
