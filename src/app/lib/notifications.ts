@@ -1,6 +1,10 @@
 import { Block, Task } from './types';
 import { getBlockLabel, formatTo12h } from './helpers';
 
+export interface CustomNotificationOptions extends NotificationOptions {
+  vibrate?: number[];
+}
+
 class NotificationService {
   private permission: NotificationPermission = 'default';
   private scheduledNotifications = new Map<string, number>();
@@ -51,13 +55,13 @@ class NotificationService {
     return this.permission === 'granted';
   }
 
-  sendNotification(title: string, options?: NotificationOptions) {
+  sendNotification(title: string, options?: CustomNotificationOptions) {
     if (!this.hasPermission()) {
       console.warn('No hay permisos para enviar notificaciones');
       return;
     }
 
-    const notifOptions: NotificationOptions = {
+    const notifOptions: CustomNotificationOptions = {
       icon: '/icon-192.png',
       badge: '/icon-192.png',
       vibrate: [200, 100, 200],
@@ -76,7 +80,7 @@ class NotificationService {
       }
 
       // Fallback: Notification API directa (solo escritorio)
-      const notification = new Notification(title, notifOptions);
+      const notification = new Notification(title, notifOptions as NotificationOptions);
       setTimeout(() => notification.close(), 10000);
       return notification;
     } catch (error) {
