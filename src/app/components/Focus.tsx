@@ -12,43 +12,48 @@ import { X, CheckCircle2, XCircle, AlertTriangle, Timer } from 'lucide-react';
 
 export function Focus() {
   const navigate = useNavigate();
-  const [currentBlock, setCurrentBlock] = useState<Block | null>(null);
-  const [timeRemaining, setTimeRemaining] = useState(0);
+  const [currentBlock, setCurrentBlock] = useState<Block | null>(() => store.getCurrentBlock());
+  const [timeRemaining, setTimeRemaining] = useState<number>(0);
   const [showExitWarning, setShowExitWarning] = useState(false);
   const [blockFinished, setBlockFinished] = useState(false);
 
+  // Sincronizar bloque activo con el store
   useEffect(() => {
-    const loadBlock = () => {
-      setCurrentBlock(store.getCurrentBlock());
+    const syncBlock = () => {
+      const active = store.getCurrentBlock();
+      setCurrentBlock(active);
     };
-    // Refrescar cuando cloud sync actualiza datos desde otro dispositivo
-    const unsubStore = store.subscribe(loadBlock);
-    return () => unsubStore();
+
+    syncBlock();
+    const unsub = store.subscribe(syncBlock);
+    return () => unsub();
   }, []);
 
+  // Manejar temporizador cuando hay un bloque activo
   useEffect(() => {
-    const block = store.getCurrentBlock();
-    setCurrentBlock(block);
-    setBlockFinished(false); // resetear al cambiar de bloque
-
-    if (!block) return;
+    if (!currentBlock) {
+      setTimeRemaining(0);
+      setBlockFinished(false);
+      return;
+    }
 
     const calcRemaining = () => {
       const now = new Date();
-      const [endHour, endMinute] = block.endTime.split(':').map(Number);
+      const [endHour, endMinute] = currentBlock.endTime.split(':').map(Number);
       const endTime = new Date();
       endTime.setHours(endHour, endMinute, 0, 0);
       return Math.max(0, Math.floor((endTime.getTime() - now.getTime()) / 1000));
     };
 
-    const rem = calcRemaining();
-    setTimeRemaining(rem);
-    if (rem === 0) {
+    const initialRem = calcRemaining();
+    setTimeRemaining(initialRem);
+    if (initialRem === 0) {
       setBlockFinished(true);
-      // Auto-complete rest blocks silently
-      if (block.type === 'rest') {
-        store.updateBlock(block.id, { status: 'completed' });
+      if (currentBlock.type === 'rest' && currentBlock.status !== 'completed') {
+        store.updateBlock(currentBlock.id, { status: 'completed' });
       }
+    } else {
+      setBlockFinished(false);
     }
 
     const interval = setInterval(() => {
@@ -57,15 +62,14 @@ export function Focus() {
       if (remaining === 0) {
         setBlockFinished(true);
         clearInterval(interval);
-        // Auto-complete rest blocks silently
-        if (block.type === 'rest') {
-          store.updateBlock(block.id, { status: 'completed' });
+        if (currentBlock.type === 'rest' && currentBlock.status !== 'completed') {
+          store.updateBlock(currentBlock.id, { status: 'completed' });
         }
       }
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [currentBlock?.id]);
+  }, [currentBlock?.id, currentBlock?.endTime, currentBlock?.type, currentBlock?.status]);
 
   const handleComplete = () => {
     if (currentBlock) {

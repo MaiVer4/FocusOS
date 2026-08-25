@@ -1,5 +1,5 @@
 import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
-import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel } from './helpers';
+import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, generateUUID } from './helpers';
 import { cloudSync } from './cloud-sync';
 import {
   analyzeHistory, LearnedProfile,
@@ -611,7 +611,7 @@ class Store {
     const endTime = addMinutesToTime(startTime, duration);
 
     const block: Block = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       type: 'deep',
       priority,
       taskId: task.id,
@@ -865,7 +865,7 @@ class Store {
         : task.difficulty === 'medium' ? 'medium' : 'low';
 
       const block: Block = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         type: 'deep',
         priority,
         taskId: task.id,
@@ -926,7 +926,7 @@ class Store {
       const endTime = addMinutesToTime(tmpl.startTime, duration);
 
       const block: Block = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         type: tmpl.type,
         label: tmpl.label,
         priority: tmpl.priority,
@@ -1264,12 +1264,16 @@ class Store {
 
   calculateDailyScore(date: string): number {
     const blocks = this.getBlocks(date);
-    if (blocks.length === 0) return 100;
+    const workBlocks = blocks.filter(b => b.type !== 'rest');
+    if (workBlocks.length === 0) return 100;
+
     let score = 100;
-    blocks.forEach(block => {
-      // Los bloques de descanso no afectan la puntuación
-      if (block.type === 'rest') return;
+    const today = todayStr();
+    workBlocks.forEach(block => {
       if (block.status === 'failed') {
+        score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
+      } else if (block.status === 'pending' && date < today) {
+        // Bloque pendiente de un día pasado que quedó abandonado
         score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
       }
       if (block.interruptions > 0) {
@@ -1280,11 +1284,11 @@ class Store {
   }
 
   /**
-   * Elimina bloques del día actual cuya hora de finalización ya pasó hace más de 10 minutos.
-   * También limpia bloques de más de 2 días de antigüedad en estado terminal.
+   * Elimina bloques pendientes del día actual cuya hora de finalización ya pasó hace más de 10 minutos
+   * y limpia bloques pendientes abandonados de días anteriores.
    *
-   * Importante: NO elimina bloques `pending` futuros — solo los que su endTime ya
-   * quedó en el pasado (bloque que no se inició / ya terminó su ventana horaria).
+   * IMPORTANTE: NUNCA elimina bloques en estado 'completed' o 'failed' para preservar el historial,
+   * alimentar las métricas a largo plazo y mantener el perfil de aprendizaje.
    *
    * Devuelve la cantidad de bloques eliminados.
    */
@@ -1294,28 +1298,25 @@ class Store {
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const grace = 10; // minutos de gracia después de endTime
 
-    const twoDaysAgo = new Date(now);
-    twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
-    const twoDaysAgoStr = dateToStr(twoDaysAgo);
-
     const before = this.blocks.length;
     this.blocks = this.blocks.filter(b => {
-      // Bloques futuros (otro día posterior a hoy): conservar siempre
+      // 1. Bloques completados o fallados: conservar SIEMPRE (historial, métricas y aprendizaje)
+      if (b.status === 'completed' || b.status === 'failed') return true;
+
+      // 2. Bloques futuros (días posteriores): conservar siempre
       if (b.date > today) return true;
 
-      // Bloques del día de hoy: eliminar si su hora de fin ya pasó hace más de 10 min
+      // 3. Bloques de hoy: si sigue pendiente o activo pero su hora de fin ya pasó hace >10 min, descartar
       if (b.date === today) {
         const [eh, em] = b.endTime.split(':').map(Number);
         const endMinutes = eh * 60 + em;
         return currentMinutes < endMinutes + grace;
       }
 
-      // Bloques de días anteriores: conservar si son recientes (ayer)
-      if (b.date > twoDaysAgoStr) return true;
-
-      // Más de 2 días: eliminar todos (ya no son relevantes para métricas ni aprendizaje)
+      // 4. Bloques pendientes de días anteriores que nunca se completaron: descartar
       return false;
     });
+
     const removed = before - this.blocks.length;
     if (removed > 0) {
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
@@ -1403,7 +1404,7 @@ class Store {
       const task = aiBlock.taskId ? taskMap.get(aiBlock.taskId) : undefined;
 
       const block: Block = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         type: aiBlock.type,
         label: aiBlock.label,
         priority: aiBlock.priority,
@@ -1423,7 +1424,7 @@ class Store {
     // Entre semana: inyectar bloque SENA fijo + transporte de regreso
     if (isWeekday) {
       const senaBlock: Block = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         type: 'rest',
         label: 'SENA',
         priority: 'high',
@@ -1439,7 +1440,7 @@ class Store {
 
       if (arrivalMin > formalEndMin) {
         const transportBlock: Block = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           type: 'rest',
           label: 'Transporte de regreso',
           priority: 'low',

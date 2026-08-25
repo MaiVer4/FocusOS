@@ -11,6 +11,7 @@ import { getCalendarEvents } from './google-calendar';
 import { store } from './store';
 import { notificationService } from './notifications';
 import { Task } from './types';
+import { generateUUID } from './helpers';
 
 const SYNC_INTERVAL = 2 * 60 * 1000; // 2 minutos
 const LAST_SYNC_KEY = 'focusos_last_sync';
@@ -77,7 +78,7 @@ async function syncClassroom(): Promise<{ tasks: number; updated: number }> {
 
       // Crear nueva tarea
       const task: Task = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         subject: ct.title,
         description: ct.description,
         notes: '',
@@ -162,7 +163,7 @@ async function syncCalendar(): Promise<{ tasks: number; updated: number; removed
 
       // Todos los eventos se importan como tareas
       const task: Task = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         subject: ev.title,
         description: ev.description,
         notes: ev.location ? `📍 ${ev.location}` : '',
