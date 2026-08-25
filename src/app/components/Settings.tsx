@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { validateApiKey, sanitizeApiKey } from '../lib/ai-engine';
@@ -14,18 +14,22 @@ export function Settings() {
   const [validatingKey, setValidatingKey] = useState(false);
   const [keyStatus, setKeyStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const [keyError, setKeyError] = useState<string | null>(null);
+  const isEditingRef = useRef(false);
 
   useEffect(() => {
     setNotificationsEnabled(notificationService.hasPermission());
-    // Refrescar settings cuando cloud sync actualiza desde otro dispositivo
+    // Refrescar settings cuando cloud sync actualiza desde otro dispositivo SOLO si el usuario no está editando
     const unsubStore = store.subscribe(() => {
-      setSettings(store.getSettings());
+      if (!isEditingRef.current) {
+        setSettings(store.getSettings());
+      }
     });
     return () => unsubStore();
   }, []);
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    isEditingRef.current = false;
     // Validaciones de coherencia
     if (settings.wakeTime >= settings.sleepTime) {
       alert('La hora de despertar debe ser anterior a la hora de dormir.');
@@ -44,6 +48,7 @@ export function Settings() {
     if (confirm('¿Restablecer todos los ajustes a los valores por defecto?')) {
       store.resetSettings();
       setSettings(store.getSettings());
+      isEditingRef.current = false;
     }
   };
 
@@ -64,6 +69,7 @@ export function Settings() {
   };
 
   const update = <K extends keyof UserSettings>(key: K, value: UserSettings[K]) => {
+    isEditingRef.current = true;
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 

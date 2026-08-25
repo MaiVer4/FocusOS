@@ -455,12 +455,19 @@ export async function validateApiKey(
 ): Promise<{ valid: boolean; error?: string }> {
   const key = sanitizeApiKey(apiKey);
   if (!key || key.length < 8) {
-    return { valid: false, error: 'La API key ingresada es demasiado corta' };
+    return { valid: false, error: 'La clave ingresada está vacía o es demasiado corta.' };
   }
 
   if (provider === 'groq') {
+    if (!key.startsWith('gsk_')) {
+      return {
+        valid: false,
+        error: 'Las claves de Groq comienzan con "gsk_". Asegúrate de copiar el "Secret Key" (no el nombre) en console.groq.com/keys',
+      };
+    }
+
     try {
-      // 1. Verificación directa mediante listado de modelos de Groq (rápido y confiable)
+      // 1. Probar endpoint de listado de modelos
       const res = await fetch('https://api.groq.com/openai/v1/models', {
         method: 'GET',
         headers: {
@@ -468,24 +475,29 @@ export async function validateApiKey(
         },
       });
 
-      if (res.ok) {
+      if (res.ok || res.status === 429) {
         return { valid: true };
       }
 
       if (res.status === 401) {
-        return { valid: false, error: 'API Key de Groq inválida. Verifica que comience con gsk_' };
-      }
-
-      if (res.status === 429) {
-        // Rate limit temporal: la key es válida
-        return { valid: true };
+        // Intentar fallback con chat completion
+        try {
+          const testMsg = await groqGenerate(key, 'ping');
+          if (testMsg && testMsg.length > 0) return { valid: true };
+        } catch {
+          // Si ambos fallan con 401
+          return {
+            valid: false,
+            error: 'Los servidores de Groq rechazaron la clave (401 Unauthorized). La clave es incorrecta, fue revocada o expiró. Genera una nueva en console.groq.com/keys',
+          };
+        }
       }
 
       const errData = await res.json().catch(() => null);
-      const errMsg = errData?.error?.message || `Error Groq (${res.status})`;
+      const errMsg = errData?.error?.message || `Error de Groq (HTTP ${res.status})`;
       return { valid: false, error: errMsg };
     } catch (fetchErr: any) {
-      // Fallback: Si GET /models falló por red, intentar un chat completion mínimo
+      // Fallback: probar chat completion si /models fue bloqueado por firewall/cors
       try {
         const text = await groqGenerate(key, 'ping');
         if (text && text.length > 0) return { valid: true };
@@ -494,7 +506,7 @@ export async function validateApiKey(
         if (msg.includes('429') || msg.includes('rate') || msg.includes('quota')) {
           return { valid: true };
         }
-        return { valid: false, error: msg || 'No se pudo conectar con los servidores de Groq' };
+        return { valid: false, error: msg || 'No se pudo establecer conexión con api.groq.com' };
       }
     }
   } else {
