@@ -35,6 +35,7 @@ import {
   GraduationCap,
   CalendarDays,
   Brain,
+  Zap,
 } from 'lucide-react';
 import { googleAuth } from '../lib/google-auth';
 import { ClassroomTask } from '../lib/google-classroom';
@@ -578,6 +579,22 @@ export function Planner() {
                 {aiGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
                 IA
               </button>
+              {isToday && blocks.length > 0 && (
+                <button
+                  onClick={() => {
+                    const moved = store.reorganizeFromNow(selectedDate);
+                    if (moved > 0) {
+                      refreshData();
+                    } else {
+                      alert('Tus bloques ya están al día o no requieren ajuste.');
+                    }
+                  }}
+                  className="px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
+                  title="Recalcular el horario desde este instante en tiempo real"
+                >
+                  <Zap className="size-3.5 fill-current" /> Recalcular
+                </button>
+              )}
               <button
                 onClick={() => setShowAddBlock(true)}
                 className="p-2 bg-red-600 hover:bg-red-700 rounded-lg transition-colors"

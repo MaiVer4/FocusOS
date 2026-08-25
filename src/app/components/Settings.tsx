@@ -206,19 +206,67 @@ export function Settings() {
           </div>
 
           {settings.exerciseMandatory && (
-            <div>
-              <label className="block text-sm text-zinc-400 mb-2">
-                Duración: <span className="text-white font-semibold">{settings.exerciseDuration} min</span>
-              </label>
-              <input type="range" min="10" max="90" step="5"
-                value={settings.exerciseDuration}
-                onChange={(e) => update('exerciseDuration', parseInt(e.target.value))}
-                className="w-full accent-green-500" />
-              <div className="flex justify-between text-xs text-zinc-500 mt-1">
-                <span>10 min</span><span>45 min</span><span>90 min</span>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">
+                  Ejercicio Matutino: <span className="text-white font-semibold">{settings.morningExerciseDuration ?? 15} min</span>
+                </label>
+                <input type="range" min="5" max="45" step="5"
+                  value={settings.morningExerciseDuration ?? 15}
+                  onChange={(e) => update('morningExerciseDuration', parseInt(e.target.value))}
+                  className="w-full accent-green-500" />
+                <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                  <span>5 min</span><span>15 min</span><span>45 min</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2">
+                  Ejercicio Nocturno: <span className="text-white font-semibold">{settings.nightExerciseDuration ?? 25} min</span>
+                </label>
+                <input type="range" min="10" max="60" step="5"
+                  value={settings.nightExerciseDuration ?? 25}
+                  onChange={(e) => update('nightExerciseDuration', parseInt(e.target.value))}
+                  className="w-full accent-green-500" />
+                <div className="flex justify-between text-xs text-zinc-500 mt-1">
+                  <span>10 min</span><span>25 min</span><span>60 min</span>
+                </div>
               </div>
             </div>
           )}
+        </div>
+
+        {/* Versatile Work & Personal Projects */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-4">
+          <h3 className="font-semibold flex items-center gap-2">
+            <Smartphone className="size-4 text-teal-400" /> Hábitos y Trabajo Versátil
+          </h3>
+
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">
+              Trabajo Versátil / Estudio Ligero Matutino: <span className="text-white font-semibold">{settings.workBlockDuration ?? 30} min</span>
+            </label>
+            <input type="range" min="15" max="60" step="5"
+              value={settings.workBlockDuration ?? 30}
+              onChange={(e) => update('workBlockDuration', parseInt(e.target.value))}
+              className="w-full accent-teal-500" />
+            <div className="flex justify-between text-xs text-zinc-500 mt-1">
+              <span>15 min</span><span>30 min</span><span>60 min</span>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm text-zinc-400 mb-2">
+              Proyectos Personales Nocturnos: <span className="text-white font-semibold">{settings.personalProjectDuration ?? 20} min</span>
+            </label>
+            <input type="range" min="10" max="60" step="5"
+              value={settings.personalProjectDuration ?? 20}
+              onChange={(e) => update('personalProjectDuration', parseInt(e.target.value))}
+              className="w-full accent-purple-500" />
+            <div className="flex justify-between text-xs text-zinc-500 mt-1">
+              <span>10 min</span><span>20 min</span><span>60 min</span>
+            </div>
+          </div>
         </div>
 
         {/* Social Media */}

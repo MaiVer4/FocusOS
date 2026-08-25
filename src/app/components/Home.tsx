@@ -10,7 +10,7 @@ import {
   scoreColor,
   todayStr,
 } from '../lib/helpers';
-import { Timer, AlertCircle, CheckCircle2, Flame, Calendar, BarChart3 } from 'lucide-react';
+import { Timer, AlertCircle, CheckCircle2, Flame, Calendar, BarChart3, Zap } from 'lucide-react';
 
 export function Home() {
   const navigate = useNavigate();
@@ -63,10 +63,26 @@ export function Home() {
       </div>
 
       {/* Current Time */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 text-center">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 text-center space-y-3">
         <div className="text-5xl font-mono font-bold tracking-tight tabular-nums">
           {formatTimeFull(currentTime)}
         </div>
+        {totalBlocks > 0 && (
+          <button
+            onClick={() => {
+              const moved = store.reorganizeFromNow(todayStr());
+              if (moved > 0) {
+                alert(`¡Día recalculado! Se ajustaron ${moved} bloques desde la hora actual.`);
+              } else {
+                alert('Tus bloques ya están al día con la hora actual.');
+              }
+            }}
+            className="w-full py-2.5 bg-amber-600/20 hover:bg-amber-600/30 border border-amber-500/30 text-amber-300 rounded-xl text-xs font-semibold transition-all flex items-center justify-center gap-2 active:scale-95"
+          >
+            <Zap className="size-4 fill-current text-amber-400" />
+            Recalcular mi día desde ahora
+          </button>
+        )}
       </div>
 
       {/* Daily Progress */}

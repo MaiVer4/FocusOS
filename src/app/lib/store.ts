@@ -1,6 +1,7 @@
 import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
 import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, generateUUID } from './helpers';
 import { cloudSync } from './cloud-sync';
+import { notificationService } from './notifications';
 import {
   analyzeHistory, LearnedProfile,
   getProductivityScore, getCategoryBonus, getOptimalDuration,
@@ -19,18 +20,22 @@ const STORAGE_KEYS = {
 
 const DEFAULT_SETTINGS: UserSettings = {
   appName: 'FocusOS',
-  wakeTime: '07:00',
+  wakeTime: '08:30',
   sleepTime: '23:00',
   scheduleStartTime: '12:00',
   scheduleEndTime: '18:00',
   arrivalTime: '18:45',
-  peakEnergyTime: 'morning',
+  peakEnergyTime: 'night',
   dailyDeepBlocksMin: 1,
-  dailyDeepBlocksMax: 3,
-  deepBlockDuration: 60,
+  dailyDeepBlocksMax: 2,
+  deepBlockDuration: 50,
   exerciseMandatory: true,
-  exerciseDuration: 30,
-  socialMediaMaxMinutes: 30,
+  exerciseDuration: 25,
+  morningExerciseDuration: 15,
+  nightExerciseDuration: 25,
+  workBlockDuration: 30,
+  personalProjectDuration: 20,
+  socialMediaMaxMinutes: 20,
 };
 
 // ─── Plantillas de rutina diaria ─────────────────────────────────────────────
@@ -65,126 +70,124 @@ function _push(
 
 // ─── Generadores dinámicos de plantilla ──────────────────────────────────────
 
-/** Lunes a Viernes — construido dinámicamente desde Settings */
+/** Lunes a Viernes — construido dinámicamente desde Settings según el estilo de vida del usuario */
 function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
-  const wake = _toMin(s.wakeTime);
-  const sleep = _toMin(s.sleepTime);
-  const formalStart = _toMin(s.scheduleStartTime);
-  const formalEnd = _toMin(s.scheduleEndTime);
-  const arrival = _toMin(s.arrivalTime);
-  const deepDur = s.deepBlockDuration || 40;
-  const exDur = s.exerciseDuration || 40;
-  const deepMax = s.dailyDeepBlocksMax || 3;
+  const wake = _toMin(s.wakeTime || '08:30');
+  const sleep = _toMin(s.sleepTime || '23:00');
+  const formalStart = _toMin(s.scheduleStartTime || '12:00');
+  const formalEnd = _toMin(s.scheduleEndTime || '18:00');
+  const arrival = _toMin(s.arrivalTime || '18:45');
+  const deepDur = s.deepBlockDuration || 50;
+  const deepMax = s.dailyDeepBlocksMax || 2;
+  const morningExDur = s.morningExerciseDuration ?? 15;
+  const nightExDur = s.nightExerciseDuration ?? 25;
+  const workDur = s.workBlockDuration ?? 30;
+  const personalProjectDur = s.personalProjectDuration ?? 20;
+  const socialDur = s.socialMediaMaxMinutes ?? 20;
 
   let c = wake; // cursor en minutos
 
-  // ═══ MAÑANA: SIEMPRE generar rutina desde wakeTime ═══
-  // La rutina matutina se genera siempre, incluso si wakeTime >= scheduleStartTime.
-  // Si no hay ventana matutina, la rutina ocurre y las formales empiezan después.
+  // ═══ MAÑANA (08:30 en adelante) ═══
+  // 1. Adaptación y rutina matutina (15 min)
+  c = _push(blocks, c, 15, 'rest', 'Despertar y adaptación', 'low');
 
-  c = _push(blocks, c, 20, 'rest', 'Despertar y rutina matutina', 'low');
-  c = _push(blocks, c, 20, 'rest', 'Desayuno', 'low');
+  // 2. Ejercicio matutino corto (15 min)
+  if (morningExDur > 0 && c + morningExDur < formalStart - 60) {
+    c = _push(blocks, c, morningExDur, 'exercise', 'Ejercicio matutino', 'high');
+  }
 
-  // Ventana antes de formales: solo estudio ligero (deep blocks van en la noche)
-  const timeBeforeFormal = formalStart - c;
-  const prepAndTransport = 30; // reservar mín. para vestirse (15) + transporte (15)
-  const morningStudyWindow = timeBeforeFormal - prepAndTransport;
+  // 3. Desayuno (25 min)
+  if (c + 25 < formalStart - 45) {
+    c = _push(blocks, c, 25, 'rest', 'Desayuno y energía', 'low');
+  }
 
-  if (morningStudyWindow >= 30) {
-    // Estudio ligero en la mañana (máx 2 bloques con descanso)
-    const lightDur = Math.min(60, morningStudyWindow);
-    c = _push(blocks, c, lightDur, 'light', 'Estudio ligero', 'medium', true);
-    const remaining = formalStart - c - prepAndTransport;
-    if (remaining >= 40) {
-      c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
-      const lightDur2 = Math.min(50, formalStart - c - prepAndTransport);
-      if (lightDur2 >= 25) {
-        c = _push(blocks, c, lightDur2, 'light', 'Estudio ligero 2', 'medium', true);
-      }
+  // 4. Trabajo versátil / Estudio ligero (30 min)
+  const timeBeforeFormalPrep = formalStart - 75; // reservar 30m prep + 45m transporte
+  if (c + workDur <= timeBeforeFormalPrep) {
+    c = _push(blocks, c, workDur, 'light', 'Trabajo versátil / Estudio ligero', 'medium', true);
+  }
+
+  // 5. Preparación (vestirse) y Transporte al SENA
+  const timeToFormal = formalStart - c;
+  if (timeToFormal >= 45) {
+    const prepDur = Math.min(30, timeToFormal - 30);
+    if (prepDur >= 15) {
+      c = _push(blocks, c, prepDur, 'rest', 'Vestirse y prepararse para el SENA', 'low');
+    }
+    const transportDur = formalStart - c;
+    if (transportDur >= 15) {
+      c = _push(blocks, c, transportDur, 'rest', 'Transporte al SENA', 'low');
     }
   }
 
-  // Prepararse y transporte antes de formales
-  const remainBeforeFormal = formalStart - c;
-  if (remainBeforeFormal >= 25) {
-    c = _push(blocks, c, 15, 'rest', 'Vestirse y prepararse', 'low');
-    const transportTime = formalStart - c;
-    if (transportTime >= 10) {
-      c = _push(blocks, c, transportTime, 'rest', 'Transporte', 'low');
-    }
-  } else if (remainBeforeFormal >= 10) {
-    c = _push(blocks, c, remainBeforeFormal, 'rest', 'Prepararse', 'low');
-  }
-
-  // ═══ FORMAL: scheduleStartTime → scheduleEndTime (fijo, no desplazable) ═══
+  // ═══ FORMAL: scheduleStartTime → scheduleEndTime (SENA: 12:00 → 18:00) ═══
   if (formalEnd > formalStart) {
-    // Si la rutina matutina se extendió más allá de formalStart, recortar el último bloque
     if (blocks.length > 0 && c > formalStart) {
       const last = blocks[blocks.length - 1];
-      const lastEnd = _toMin(last.endTime);
-      if (lastEnd > formalStart) {
+      if (_toMin(last.endTime) > formalStart) {
         last.endTime = s.scheduleStartTime;
       }
     }
     blocks.push({
-      type: 'rest', label: 'SENA',
-      startTime: s.scheduleStartTime, endTime: s.scheduleEndTime,
+      type: 'rest',
+      label: 'SENA',
+      startTime: s.scheduleStartTime,
+      endTime: s.scheduleEndTime,
       priority: 'high',
     });
   }
 
-  // ═══ TRANSICIÓN: scheduleEndTime → arrivalTime ═══
+  // ═══ TRANSICIÓN: Transporte de regreso (18:00 → 18:45) ═══
   if (arrival > formalEnd) {
     blocks.push({
-      type: 'rest', label: 'Transporte de regreso',
-      startTime: s.scheduleEndTime, endTime: s.arrivalTime,
+      type: 'rest',
+      label: 'Transporte de regreso',
+      startTime: s.scheduleEndTime,
+      endTime: s.arrivalTime,
       priority: 'low',
     });
   }
 
-  // ═══ TARDE/NOCHE: arrivalTime → sleepTime ═══
+  // ═══ NOCHE: arrivalTime → sleepTime (18:45 → 23:00 - PICO DE ENERGÍA) ═══
   c = Math.max(arrival, formalEnd);
 
-  // Cena (45 min o lo que quepa)
-  const dinnerDur = Math.min(45, sleep - c - 60);
-  if (dinnerDur >= 20) {
-    c = _push(blocks, c, dinnerDur, 'rest', 'Llegada y cena', 'low');
+  // Llegada y Cena (45 min)
+  if (c + 45 <= sleep - 120) {
+    c = _push(blocks, c, 45, 'rest', 'Llegada y cena', 'low');
   }
 
-  // Bloques profundos con descansos (solo en la noche)
+  // Bloques Profundos de Noche (Pico de energía: 45-60 min cada uno)
   const breakDur = 10;
   for (let i = 0; i < deepMax; i++) {
-    if (c + deepDur > sleep - 30) break; // reservar 30 min para cierre del día
+    if (c + deepDur > sleep - 60) break; // reservar 60 min para ejercicio nocturno, proyectos y desconexión
     c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${i + 1}`, 'high', true);
 
-    // Descanso entre bloques (no después del último)
-    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 30) {
+    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 60) {
       c = _push(blocks, c, breakDur, 'rest', 'Descanso', 'low');
     }
   }
 
-  // Ejercicio
-  if (s.exerciseMandatory && c + exDur <= sleep - 20) {
-    c = _push(blocks, c, exDur, 'exercise', 'Ejercicio', 'high');
-    if (c + 20 <= sleep - 10) {
-      c = _push(blocks, c, 20, 'rest', 'Ducha', 'low');
+  // Ejercicio nocturno + Ducha (25 min ejercicio)
+  if (s.exerciseMandatory && nightExDur > 0 && c + nightExDur <= sleep - 35) {
+    c = _push(blocks, c, nightExDur, 'exercise', 'Ejercicio nocturno', 'high');
+    if (c + 15 <= sleep - 20) {
+      c = _push(blocks, c, 15, 'rest', 'Ducha', 'low');
     }
   }
 
-  // Revisión y documentación
-  if (c + 30 <= sleep - 10) {
-    c = _push(blocks, c, 30, 'light', 'Revisión y documentación', 'medium', true);
+  // Proyectos personales / Repaso (20 min)
+  if (personalProjectDur > 0 && c + personalProjectDur <= sleep - 20) {
+    c = _push(blocks, c, personalProjectDur, 'light', 'Proyectos personales', 'medium', true);
   }
 
-  // Redes sociales
-  const socialTime = Math.min(s.socialMediaMaxMinutes || 15, 15);
-  if (socialTime >= 5 && c + socialTime <= sleep) {
-    c = _push(blocks, c, socialTime, 'rest', 'Redes sociales', 'low');
+  // Redes sociales (15-20 min)
+  if (socialDur > 0 && c + socialDur <= sleep - 10) {
+    c = _push(blocks, c, socialDur, 'rest', 'Redes sociales', 'low');
   }
 
-  // Prepararse para dormir
-  const windDown = Math.min(30, sleep - c);
+  // Prepararse para dormir (15 min)
+  const windDown = Math.min(20, sleep - c);
   if (windDown >= 10) {
     _push(blocks, c, windDown, 'rest', 'Prepararse para dormir', 'low');
   }
@@ -1067,6 +1070,68 @@ class Store {
     }
     this.blocks = this.blocks.filter(b => !idsToRemove.has(b.id));
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+  }
+
+  /**
+   * Reorganiza los bloques pendientes del día actual a partir del momento presente (tiempo real).
+   * Si un bloque debía haber empezado antes, lo desplaza automáticamente respetando bloques fijos (SENA).
+   */
+  reorganizeFromNow(date: string): number {
+    const today = todayStr();
+    if (date !== today) return 0;
+
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    const dayBlocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    if (dayBlocks.length === 0) return 0;
+
+    let cursor = currentMinutes + 2; // arrancar 2 min en el futuro
+    cursor = Math.ceil(cursor / 5) * 5; // redondear a múltiplo de 5 min
+
+    let modifiedCount = 0;
+
+    for (const b of dayBlocks) {
+      const label = (b.label ?? '').toLowerCase();
+      // No desplazar bloques completados, fallados ni la jornada SENA
+      if (b.status === 'completed' || b.status === 'failed' || label.includes('sena')) {
+        const endMin = _toMin(b.endTime);
+        if (endMin > cursor) cursor = endMin;
+        continue;
+      }
+
+      const bEndMin = _toMin(b.endTime);
+      // Si el bloque ya terminó en el pasado, no mover
+      if (bEndMin <= currentMinutes) continue;
+
+      const bStartMin = _toMin(b.startTime);
+      // Si el bloque debía haber empezado antes del cursor actual:
+      if (bStartMin < cursor) {
+        const duration = b.duration;
+        const newStart = _toTime(cursor);
+        const newEnd = _toTime(cursor + duration);
+
+        if (_toMin(newEnd) <= 23 * 60 + 59) {
+          b.startTime = newStart;
+          b.endTime = newEnd;
+          cursor += duration;
+          modifiedCount++;
+        }
+      } else {
+        cursor = Math.max(cursor, _toMin(b.endTime));
+      }
+    }
+
+    if (modifiedCount > 0) {
+      this.reorganizeBlocks(date);
+      this.assignUnblockedTasks(date);
+      if (notificationService.hasPermission()) {
+        this.getBlocks(date).forEach(b => notificationService.scheduleBlockNotifications(b));
+      }
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    }
+
+    return modifiedCount;
   }
 
   // ─── Blocks ────────────────────────────────────────────────────────────────

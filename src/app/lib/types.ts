@@ -64,12 +64,16 @@ export interface UserSettings {
   peakEnergyTime: PeakEnergyTime;
   dailyDeepBlocksMin: number;
   dailyDeepBlocksMax: number;
-  deepBlockDuration: number; // in minutes
+  deepBlockDuration: number; // in minutes (45-60 min)
   exerciseMandatory: boolean;
-  exerciseDuration: number;
-  socialMediaMaxMinutes: number;
-  aiProvider?: 'groq' | 'gemini';  // Proveedor de IA (default: groq)
-  aiApiKey?: string;               // API key del proveedor seleccionado
+  exerciseDuration: number; // general/fallback
+  morningExerciseDuration?: number; // default 15 min
+  nightExerciseDuration?: number;   // default 25 min
+  workBlockDuration?: number;        // trabajo versátil 30 min
+  personalProjectDuration?: number;  // proyectos personales 20 min
+  socialMediaMaxMinutes: number;    // 15-20 min
+  aiProvider?: 'groq' | 'gemini';   // Proveedor de IA (default: groq)
+  aiApiKey?: string;                // API key del proveedor seleccionado
   /** @deprecated Usar aiApiKey. Se mantiene solo para migración de datos existentes. */
   geminiApiKey?: string;
 }
