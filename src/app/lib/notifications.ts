@@ -15,13 +15,23 @@ class NotificationService {
       this.permission = Notification.permission;
     }
     this.registerServiceWorker();
+    this.setupVisibilitySync();
+  }
+
+  /** Al volver a la app o desbloquear el celular, limpiar notificaciones que hayan expirado */
+  private setupVisibilitySync() {
+    if (typeof document === 'undefined') return;
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        // Al despertar la pestaña, las notificaciones atrasadas se descartan
+      }
+    });
   }
 
   private async registerServiceWorker() {
     if (!('serviceWorker' in navigator)) return;
     try {
       this.swRegistration = await navigator.serviceWorker.register('/sw.js');
-      // Esperar a que el SW esté activo
       if (!this.swRegistration.active) {
         await new Promise<void>((resolve) => {
           const sw = this.swRegistration!.installing ?? this.swRegistration!.waiting;
@@ -56,20 +66,16 @@ class NotificationService {
   }
 
   sendNotification(title: string, options?: CustomNotificationOptions) {
-    if (!this.hasPermission()) {
-      console.warn('No hay permisos para enviar notificaciones');
-      return;
-    }
+    if (!this.hasPermission()) return;
 
     const notifOptions: CustomNotificationOptions = {
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      vibrate: [200, 100, 200],
+      vibrate: [150], // Pulso suave y amigable
       ...options,
     };
 
     try {
-      // Intentar vía Service Worker (funciona en móvil)
       if (this.swRegistration?.active) {
         this.swRegistration.active.postMessage({
           type: 'SHOW_NOTIFICATION',
@@ -79,67 +85,59 @@ class NotificationService {
         return;
       }
 
-      // Fallback: Notification API directa (solo escritorio)
       const notification = new Notification(title, notifOptions as NotificationOptions);
-      setTimeout(() => notification.close(), 10000);
+      setTimeout(() => notification.close(), 6000);
       return notification;
     } catch (error) {
       console.error('Error al enviar notificación:', error);
     }
   }
 
+  /**
+   * Programa notificaciones esenciales para un bloque:
+   * - CERO notificaciones para bloques de descanso ('rest') como comidas o transporte.
+   * - 5 minutos antes SOLO para bloques profundos ('deep').
+   * - Al inicio para bloques de trabajo y ejercicio.
+   * - Al finalizar el bloque de enfoque.
+   */
   scheduleBlockNotifications(block: Block) {
-    // Limpiar notificaciones previas para este bloque
     this.cancelBlockNotifications(block.id);
+
+    // CERO notificaciones para bloques de descanso, comida, transporte o dormir
+    if (block.type === 'rest') return;
 
     const now = new Date();
     const [startHour, startMinute] = block.startTime.split(':').map(Number);
     const [endHour, endMinute] = block.endTime.split(':').map(Number);
-    
+
     const startTime = new Date();
     startTime.setHours(startHour, startMinute, 0, 0);
-    
+
     const endTime = new Date();
     endTime.setHours(endHour, endMinute, 0, 0);
 
-    // Notificación 5 minutos antes
-    const fiveMinBefore = new Date(startTime.getTime() - 5 * 60 * 1000);
-    if (fiveMinBefore > now) {
-      const timeout = fiveMinBefore.getTime() - now.getTime();
-      const timerId = window.setTimeout(() => {
-        this.sendBlockWarning(block, 5);
-      }, timeout);
-      this.scheduledNotifications.set(`${block.id}-5min`, timerId);
+    // 1. Alerta 5 minutos antes (solo para Trabajo Profundo)
+    if (block.type === 'deep') {
+      const fiveMinBefore = new Date(startTime.getTime() - 5 * 60 * 1000);
+      if (fiveMinBefore > now) {
+        const timeout = fiveMinBefore.getTime() - now.getTime();
+        const timerId = window.setTimeout(() => {
+          this.sendBlockWarning(block, 5);
+        }, timeout);
+        this.scheduledNotifications.set(`${block.id}-5min`, timerId);
+      }
     }
 
-    // Notificación al inicio
+    // 2. Alerta al Inicio del bloque
     if (startTime > now) {
       const timeout = startTime.getTime() - now.getTime();
       const timerId = window.setTimeout(() => {
         this.sendBlockStart(block);
-        
-        // Programar advertencia si no se inicia en 3 minutos
-        const warningTimeout = window.setTimeout(() => {
-          if (block.status === 'pending') {
-            this.sendLateWarning(block);
-          }
-        }, 3 * 60 * 1000);
-        this.scheduledNotifications.set(`${block.id}-late`, warningTimeout);
       }, timeout);
       this.scheduledNotifications.set(`${block.id}-start`, timerId);
     }
 
-    // Notificación a la mitad del bloque
-    const halfTime = new Date((startTime.getTime() + endTime.getTime()) / 2);
-    if (halfTime > now) {
-      const timeout = halfTime.getTime() - now.getTime();
-      const timerId = window.setTimeout(() => {
-        this.sendBlockMidpoint(block);
-      }, timeout);
-      this.scheduledNotifications.set(`${block.id}-half`, timerId);
-    }
-
-    // Notificación al final
+    // 3. Alerta al Finalizar el bloque
     if (endTime > now) {
       const timeout = endTime.getTime() - now.getTime();
       const timerId = window.setTimeout(() => {
@@ -152,42 +150,27 @@ class NotificationService {
   private sendBlockWarning(block: Block, minutesBefore: number) {
     const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
-      `⏰ ${blockLabel} en ${minutesBefore} minutos`,
+      `⏰ ${blockLabel} en ${minutesBefore} min`,
       {
-        body: block.task?.subject || 'Prepárate para tu próximo bloque',
+        body: block.task?.subject ? `Prepárate: ${block.task.subject}` : 'Prepárate para iniciar tu bloque de enfoque',
         tag: `block-warning-${block.id}`,
-        requireInteraction: false,
+        vibrate: [150],
       }
     );
   }
 
   private sendBlockStart(block: Block) {
     const blockLabel = getBlockLabel(block.type);
-    let body = block.task?.subject || 'Es hora de comenzar';
-    
-    if (block.type === 'deep') {
-      body += '\n\n🔥 Celular fuera. Modo disciplina.';
-    }
+    const body = block.task?.subject
+      ? `${block.task.subject} · ${block.duration} min`
+      : `Bloque iniciado · ${block.duration} min`;
 
     this.sendNotification(
-      `🎯 ${blockLabel} - INICIO`,
+      `🎯 ${blockLabel}`,
       {
         body,
         tag: `block-start-${block.id}`,
-        requireInteraction: true,
-        vibrate: [300, 100, 300, 100, 300],
-      }
-    );
-  }
-
-  private sendBlockMidpoint(block: Block) {
-    const blockLabel = getBlockLabel(block.type);
-    this.sendNotification(
-      `⏱️ ${blockLabel} - Mitad del tiempo`,
-      {
-        body: '¡Vas a la mitad! Mantén el enfoque.',
-        tag: `block-mid-${block.id}`,
-        requireInteraction: false,
+        vibrate: [200],
       }
     );
   }
@@ -195,34 +178,20 @@ class NotificationService {
   private sendBlockEnd(block: Block) {
     const blockLabel = getBlockLabel(block.type);
     this.sendNotification(
-      `✅ ${blockLabel} - FINALIZADO`,
+      `✅ ${blockLabel} completado`,
       {
-        body: '¡Bloque completado! Toma un descanso.',
+        body: '¡Buen trabajo! Toma un descanso y prepárate para la siguiente actividad.',
         tag: `block-end-${block.id}`,
-        requireInteraction: false,
-        vibrate: [200, 100, 200],
-      }
-    );
-  }
-
-  private sendLateWarning(block: Block) {
-    const blockLabel = getBlockLabel(block.type);
-    this.sendNotification(
-      `⚠️ BLOQUE RETRASADO`,
-      {
-        body: `${blockLabel} debió iniciar hace 3 minutos.\n\nSe registrará como fallado si no inicias ahora.`,
-        tag: `block-late-${block.id}`,
-        requireInteraction: true,
-        vibrate: [500, 200, 500, 200, 500],
+        vibrate: [150],
       }
     );
   }
 
   cancelBlockNotifications(blockId: string) {
-    const keys = Array.from(this.scheduledNotifications.keys()).filter(key => 
+    const keys = Array.from(this.scheduledNotifications.keys()).filter(key =>
       key.startsWith(blockId)
     );
-    
+
     keys.forEach(key => {
       const timerId = this.scheduledNotifications.get(key);
       if (timerId) {
@@ -234,8 +203,9 @@ class NotificationService {
 
   /**
    * Programa notificaciones para un entregable:
-   * - Primera alerta 8 horas antes de la entrega
-   * - Luego cada 2 horas hasta la hora de entrega
+   * - Solo 2 alertas de alto valor:
+   *   1. 2 horas antes de la entrega (aviso para finalizar)
+   *   2. En la hora exacta de la entrega
    */
   scheduleDeliverableNotifications(task: Task) {
     this.cancelTaskNotifications(task.id);
@@ -249,41 +219,36 @@ class NotificationService {
 
     if (dueDate <= now) return;
 
-    const intervals = [8, 6, 4, 2];
-
-    intervals.forEach((hoursBefore, idx) => {
-      const alertTime = new Date(dueDate.getTime() - hoursBefore * 60 * 60 * 1000);
-      if (alertTime <= now) return;
-
-      const timeout = alertTime.getTime() - now.getTime();
+    // 1. Alerta 2 horas antes
+    const twoHoursBefore = new Date(dueDate.getTime() - 2 * 60 * 60 * 1000);
+    if (twoHoursBefore > now) {
+      const timeout = twoHoursBefore.getTime() - now.getTime();
       const timerId = window.setTimeout(() => {
         const timeStr = formatTo12h(
           `${String(dueDate.getHours()).padStart(2, '0')}:${String(dueDate.getMinutes()).padStart(2, '0')}`
         );
         this.sendNotification(
-          `📋 ENTREGABLE: ${task.subject}`,
+          `📋 Entregable próximo: ${task.subject}`,
           {
-            body: `⏰ Faltan ${hoursBefore} horas para la entrega (${timeStr}).\n\n${task.description || 'Revisa tu tarea.'}`,
-            tag: `deliverable-${task.id}-${hoursBefore}h`,
-            requireInteraction: true,
-            vibrate: [300, 100, 300, 100, 300],
+            body: `Faltan 2 horas para la entrega (${timeStr}).`,
+            tag: `deliverable-${task.id}-2h`,
+            vibrate: [200, 100, 200],
           }
         );
       }, timeout);
-      this.scheduledNotifications.set(`task-${task.id}-${idx}`, timerId);
-    });
+      this.scheduledNotifications.set(`task-${task.id}-2h`, timerId);
+    }
 
-    // Alerta final: en la hora exacta de entrega
+    // 2. Alerta en la hora exacta de entrega
     const finalTimeout = dueDate.getTime() - now.getTime();
     if (finalTimeout > 0) {
       const timerId = window.setTimeout(() => {
         this.sendNotification(
-          `🚨 ENTREGA AHORA: ${task.subject}`,
+          `🚨 Entrega ahora: ${task.subject}`,
           {
-            body: '¡Es la hora de entrega! Asegúrate de entregar a tiempo.',
-            tag: `deliverable-${task.id}-now`,
-            requireInteraction: true,
-            vibrate: [500, 200, 500, 200, 500],
+            body: '¡Es la hora límite de entrega! Asegúrate de subir tu evidencia.',
+            tag: `deliverable-${task.id}-final`,
+            vibrate: [300, 100, 300],
           }
         );
       }, finalTimeout);

@@ -1,7 +1,7 @@
 // FocusOS Service Worker — Soporte de notificaciones en móvil
-const CACHE_NAME = 'focusos-v1';
+const CACHE_NAME = 'focusos-v2';
 
-self.addEventListener('install', (event) => {
+self.addEventListener('install', () => {
   self.skipWaiting();
 });
 
@@ -13,8 +13,15 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
     const { title, options } = event.data;
+    const cleanOptions = {
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      vibrate: [150],
+      renotify: false,
+      ...options,
+    };
     event.waitUntil(
-      self.registration.showNotification(title, options)
+      self.registration.showNotification(title, cleanOptions)
     );
   }
 });
