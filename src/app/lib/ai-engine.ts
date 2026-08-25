@@ -315,15 +315,26 @@ function buildContextPrompt(
 }
 
 function buildTasksPrompt(tasks: Task[]): string {
-  if (tasks.length === 0) return 'No hay tareas pendientes.';
-  const lines = ['=== TAREAS PENDIENTES ==='];
+  if (tasks.length === 0) {
+    return `=== TAREAS PENDIENTES ===
+Actualmente el usuario NO tiene tareas pendientes registradas.
+⚠️ PROHIBICIÓN ESTRICTA: NO inventes tareas ni materias ficticias. Los bloques de estudio deben llamarse genéricamente "Bloque Profundo 1", "Bloque Profundo 2", "Estudio Ligero", "Repaso" o "Proyectos Personales" con "taskId": null.`;
+  }
+  const lines = [
+    '=== TAREAS PENDIENTES DEL USUARIO (USA ÚNICAMENTE ESTAS TAREAS) ===',
+    '⚠️ PROHIBICIÓN ESTRICTA: ESTÁ TOTALMENTE PROHIBIDO INVENTAR MATERIAS O TAREAS QUE NO ESTÉN EN ESTA LISTA:',
+  ];
   for (const t of tasks) {
     const due = t.dueDate ? `entrega: ${t.dueDate.split('T')[0]}` : 'sin fecha';
     const cat = t.category ? `[${t.category}]` : '';
-    const deliverable = t.isDeliverable ? '⚠️ ENTREGABLE' : '';
-    const sub = t.subtasks ? `(${t.subtasks.filter(s => s.done).length}/${t.subtasks.length} sub)` : '';
-    lines.push(`- ID:${t.id} | "${t.subject}" ${cat} | ${t.difficulty} | ${due} | ${t.status} ${deliverable} ${sub}`);
-    if (t.description) lines.push(`  ${t.description}`);
+    const deliverable = t.isDeliverable ? '⚠️ ENTREGABLE CRÍTICO' : '';
+    const sub = t.subtasks
+      ? `(${t.subtasks.filter((s) => s.done).length}/${t.subtasks.length} sub)`
+      : '';
+    lines.push(
+      `- ID:"${t.id}" | Materia/Tarea:"${t.subject}" ${cat} | Dificultad:${t.difficulty} | ${due} | ${t.status} ${deliverable} ${sub}`
+    );
+    if (t.description) lines.push(`  Descripción: ${t.description}`);
   }
   return lines.join('\n');
 }
@@ -349,7 +360,7 @@ export async function generateAISchedule(
   settings: UserSettings,
   profile: LearnedProfile | null,
   recentMetrics: DailyMetrics[],
-  existingBlocks: Block[],
+  existingBlocks: Block[]
 ): Promise<AIScheduleResult> {
   const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
 
@@ -368,9 +379,10 @@ Genera un horario optimizado para: ${date} (${dayNames[dayOfWeek]})
 
 REGLAS ESTRICTAS DE HORARIO (OBLIGATORIO):
 - ❌ PROHIBIDO crear bloques que empiecen ANTES de ${settings.wakeTime} o terminen DESPUÉS de ${settings.sleepTime}
-${isWeekend
-  ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
-  : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA
+${
+  isWeekend
+    ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
+    : `- ❌ PROHIBIDO crear bloques de estudio (deep/light) entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA
 - ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
 - ❌ PROHIBIDO crear bloques DEEP en la mañana (${settings.wakeTime} a ${settings.scheduleStartTime}) — los bloques profundos son SOLO en la noche
 - ✅ Ventana MAÑANA: ${settings.wakeTime} a ${settings.scheduleStartTime} → rutina, desayuno, solo estudio LIGERO (type:"light")
@@ -379,22 +391,23 @@ ${isWeekend
 }
 
 REGLAS GENERALES:
-1. Cada bloque: type (deep|light|exercise|rest), label, startTime (HH:mm), endTime (HH:mm), priority (high|medium|low)
-2. Solo bloques de ESTUDIO (deep/light cuyo propósito es estudiar una tarea académica) llevan taskId. Bloques exercise, rest, y rutinas diarias NUNCA llevan taskId
+1. Cada bloque: type (deep|light|exercise|rest), label, startTime (HH:mm), endTime (HH:mm), priority (high|medium|low), taskId (string o null), reason (string)
+2. ⚠️ ASIGNACIÓN ESTRICTA DE TAREAS:
+   - Usa ÚNICAMENTE los IDs exactos de la lista "=== TAREAS PENDIENTES DEL USUARIO ===" para la propiedad "taskId".
+   - Si asignas una tarea real, usa el nombre exacto de la materia como "label".
+   - NUNCA inventes nombres de materias ni tareas ficticias.
+   - Si un bloque de estudio no tiene tarea de la lista, coloca "taskId": null y nómbralo "Bloque Profundo 1", "Bloque Profundo 2", "Estudio Ligero" o "Repaso General".
 3. Tareas urgentes/difíciles en franjas de mayor productividad (pico de energía: ${settings.peakEnergyTime})
 4. Descansos de 5-15 min entre bloques de estudio
 5. Incluir ejercicio si es obligatorio (${settings.exerciseMandatory ? 'SÍ es obligatorio' : 'no es obligatorio'})
 6. Sin solapamientos entre bloques
-7. Comidas (Desayuno, Almuerzo, Cena) → SIEMPRE tipo "rest", SIN taskId
-8. Tareas difíciles/urgentes en franjas con mejor tasa de éxito del perfil
-9. Duraciones de bloques deep cercanas a ${settings.deepBlockDuration} min
-10. Generar entre ${settings.dailyDeepBlocksMin} y ${settings.dailyDeepBlocksMax} bloques profundos
-11. Redes sociales, preparación para dormir, transporte, y cualquier rutina no-académica → SIEMPRE tipo "rest", SIN taskId. Solo deep/light de estudio llevan taskId
+7. Comidas (Desayuno, Almuerzo, Cena) → SIEMPRE tipo "rest", SIN taskId ("taskId": null)
+8. Redes sociales, preparación para dormir, transporte, y cualquier rutina no-académica → SIEMPRE tipo "rest", SIN taskId
 
 Responde SOLO con JSON válido (sin markdown, sin backticks):
 {
-  "blocks": [{"type":"deep","label":"nombre","startTime":"HH:mm","endTime":"HH:mm","priority":"high","taskId":"id","reason":"razón"}],
-  "insights": ["obs 1"],
+  "blocks": [{"type":"deep","label":"nombre","startTime":"HH:mm","endTime":"HH:mm","priority":"high","taskId":"id_real_o_null","reason":"razón"}],
+  "insights": ["observación 1"],
   "confidence": 0.85
 }`;
 
@@ -404,48 +417,68 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
     if (!Array.isArray(parsed.blocks)) throw new Error('Respuesta sin bloques válidos');
 
     // Validación de formato básico
-    parsed.blocks = parsed.blocks.filter(b =>
-      b.type && b.startTime && b.endTime && b.label &&
-      ['deep', 'light', 'exercise', 'rest'].includes(b.type) &&
-      /^\d{2}:\d{2}$/.test(b.startTime) && /^\d{2}:\d{2}$/.test(b.endTime)
+    parsed.blocks = parsed.blocks.filter(
+      (b) =>
+        b.type &&
+        b.startTime &&
+        b.endTime &&
+        b.label &&
+        ['deep', 'light', 'exercise', 'rest'].includes(b.type) &&
+        /^\d{2}:\d{2}$/.test(b.startTime) &&
+        /^\d{2}:\d{2}$/.test(b.endTime)
     );
 
     // ─── Validación de horario base ──────────────────────────────────
-    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const toMin = (t: string) => {
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + m;
+    };
     const wakeMin = toMin(settings.wakeTime);
     const sleepMin = toMin(settings.sleepTime);
     const formalStartMin = toMin(settings.scheduleStartTime);
     const formalEndMin = toMin(settings.scheduleEndTime);
     const arrivalMin = toMin(settings.arrivalTime);
 
-    parsed.blocks = parsed.blocks.filter(b => {
+    parsed.blocks = parsed.blocks.filter((b) => {
       const start = toMin(b.startTime);
       const end = toMin(b.endTime);
 
       // Rechazar bloques fuera del rango despertar-dormir
       if (start < wakeMin || end > sleepMin) {
-        console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: fuera de horario ${settings.wakeTime}-${settings.sleepTime}`);
+        console.warn(
+          `[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: fuera de horario ${settings.wakeTime}-${settings.sleepTime}`
+        );
         return false;
       }
 
       // Entre semana: rechazar bloques deep en la mañana (solo van en la noche)
       if (!isWeekend && b.type === 'deep' && start < formalStartMin) {
-        console.warn(`[AI] Bloque deep "${b.label}" (${b.startTime}-${b.endTime}) descartado: bloques profundos solo en la noche`);
+        console.warn(
+          `[AI] Bloque deep "${b.label}" (${b.startTime}-${b.endTime}) descartado: bloques profundos solo en la noche`
+        );
         return false;
       }
 
       // Entre semana: rechazar bloques de estudio/ejercicio durante horario formal
       if (!isWeekend && (b.type === 'deep' || b.type === 'exercise')) {
         if (start < formalEndMin && end > formalStartMin) {
-          console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: se solapa con horario formal ${settings.scheduleStartTime}-${settings.scheduleEndTime}`);
+          console.warn(
+            `[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: se solapa con horario formal ${settings.scheduleStartTime}-${settings.scheduleEndTime}`
+          );
           return false;
         }
       }
 
       // Entre semana: rechazar bloques de estudio en la franja de transporte
-      if (!isWeekend && (b.type === 'deep' || b.type === 'light') && b.label?.toLowerCase().indexOf('formal') === -1) {
+      if (
+        !isWeekend &&
+        (b.type === 'deep' || b.type === 'light') &&
+        b.label?.toLowerCase().indexOf('formal') === -1
+      ) {
         if (start >= formalEndMin && start < arrivalMin) {
-          console.warn(`[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: franja de transporte ${settings.scheduleEndTime}-${settings.arrivalTime}`);
+          console.warn(
+            `[AI] Bloque "${b.label}" (${b.startTime}-${b.endTime}) descartado: franja de transporte ${settings.scheduleEndTime}-${settings.arrivalTime}`
+          );
           return false;
         }
       }
@@ -453,24 +486,53 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
       return true;
     });
 
-    // Validar taskIds contra tareas reales
-    const taskIds = new Set(tasks.map(t => t.id));
-    for (const b of parsed.blocks)
-      if (b.taskId && !taskIds.has(b.taskId)) b.taskId = undefined;
+    // Validar taskIds y desinfectar materias/tareas inventadas
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
+    const assignedTasks = new Set<string>();
+    let deepNum = 1;
+    let lightNum = 1;
 
-    // Strip taskId de bloques que no son de estudio (rest/exercise nunca llevan tarea)
     for (const b of parsed.blocks) {
-      if (b.type === 'rest' || b.type === 'exercise') {
+      if (b.type === 'rest' || b.type === 'exercise' || isRoutineLabel(b.label ?? '')) {
+        b.type = isRoutineLabel(b.label ?? '') ? 'rest' : b.type;
         b.taskId = undefined;
+        continue;
       }
-      // Forzar tipo rest para bloques con labels de rutina (la IA a veces usa tipo incorrecto)
-      if (isRoutineLabel(b.label ?? '')) {
-        b.type = 'rest';
-        b.taskId = undefined;
+
+      // Bloques de estudio
+      if (b.taskId && taskMap.has(b.taskId)) {
+        // Tarea legítima
+        assignedTasks.add(b.taskId);
+        const legitimateTask = taskMap.get(b.taskId)!;
+        b.label = legitimateTask.subject;
+      } else {
+        // Si no tiene taskId o la IA inventó un ID falso:
+        // Intentar enlazar por coincidencia exacta con alguna tarea real del usuario
+        const matched = tasks.find(
+          (t) =>
+            !assignedTasks.has(t.id) &&
+            (b.label?.toLowerCase().includes(t.subject.toLowerCase()) ||
+              t.subject.toLowerCase().includes(b.label?.toLowerCase() ?? ''))
+        );
+
+        if (matched) {
+          b.taskId = matched.id;
+          b.label = matched.subject;
+          assignedTasks.add(matched.id);
+        } else {
+          // No es una tarea real del usuario: LIMPIAR el label para no mostrar tareas ficticias
+          b.taskId = undefined;
+          if (b.type === 'deep') {
+            b.label = `Bloque Profundo ${deepNum++}`;
+          } else {
+            b.label = `Estudio Ligero ${lightNum++}`;
+          }
+        }
       }
     }
 
-    parsed.confidence = typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5;
+    parsed.confidence =
+      typeof parsed.confidence === 'number' ? Math.max(0, Math.min(1, parsed.confidence)) : 0.5;
     parsed.insights = Array.isArray(parsed.insights) ? parsed.insights : [];
     return parsed;
   } catch (error: any) {

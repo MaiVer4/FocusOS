@@ -744,7 +744,7 @@ class Store {
       for (const [idx, task] of assignment) {
         const block = freeBlocks[idx];
         this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
+          b.id === block.id ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() } : b
         );
       }
     } else {
@@ -754,7 +754,7 @@ class Store {
         const block = freeBlocks[i];
         const task = dayTasks[i];
         this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
+          b.id === block.id ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() } : b
         );
       }
     }
@@ -1538,21 +1538,23 @@ class Store {
         const bEnd = eh * 60 + em;
         const labelLower = (aiBlock.label ?? '').toLowerCase();
         const isFormalOrTransport = labelLower.includes('sena') || labelLower.includes('formal')
-          || labelLower.includes('transporte de regreso');
+          || labelLower.includes('transporte');
         // Descartar si se solapa con el rango formal+transporte
         if (isFormalOrTransport || (bStart < arrivalMin && bEnd > formalStartMin)) {
           continue;
         }
       }
 
-      const task = aiBlock.taskId ? taskMap.get(aiBlock.taskId) : undefined;
+      // Enlazar solo con tareas REALES verificadas
+      const validTaskId = aiBlock.taskId && taskMap.has(aiBlock.taskId) ? aiBlock.taskId : undefined;
+      const task = validTaskId ? taskMap.get(validTaskId) : undefined;
 
       const block: Block = {
         id: generateUUID(),
         type: aiBlock.type,
-        label: aiBlock.label,
-        priority: aiBlock.priority,
-        taskId: aiBlock.taskId,
+        label: task ? task.subject : aiBlock.label,
+        priority: task?.isDeliverable ? 'high' : aiBlock.priority,
+        taskId: validTaskId,
         task,
         duration,
         startTime: aiBlock.startTime,
@@ -1598,12 +1600,14 @@ class Store {
         this.addBlock(transportBlock);
         newBlocks.push(transportBlock);
       }
-
-      // Ordenar por startTime para que la UI los muestre en orden
-      newBlocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
     }
 
-    return { blocks: newBlocks, insights: result.insights };
+    // Auto-asignar tareas reales pendientes a cualquier bloque de estudio libre
+    this.assignUnblockedTasks(date);
+    this.reorganizeBlocks(date);
+
+    const finalBlocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    return { blocks: finalBlocks, insights: result.insights };
   }
 
   // ─── Learning Profile ──────────────────────────────────────────────────────
