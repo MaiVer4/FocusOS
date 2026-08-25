@@ -1082,65 +1082,135 @@ class Store {
   }
 
   /**
-   * Reorganiza los bloques pendientes del día actual a partir del momento presente (tiempo real).
-   * Si un bloque debía haber empezado antes, lo desplaza automáticamente respetando bloques fijos (SENA).
+   * Reorganiza los bloques de un día de forma elástica e inteligente:
+   *  1. Sincroniza bloques fijos (SENA, transporte, rutinas) si la configuración de horarios cambió.
+   *  2. Si es el día de hoy, desplaza bloques que debían haber empezado antes respetando la hora actual.
+   *  3. Resuelve solapamientos y compacta los bloques sin dejar huecos muertos.
+   *  4. Reasigna tareas pendientes a bloques disponibles.
    */
   reorganizeFromNow(date: string): number {
-    const today = todayStr();
-    if (date !== today) return 0;
+    const s = this.settings;
+    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+    const isToday = date === todayStr();
 
-    const now = new Date();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-    const dayBlocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const dayBlocks = this.getBlocks(date);
     if (dayBlocks.length === 0) return 0;
-
-    let cursor = currentMinutes + 2; // arrancar 2 min en el futuro
-    cursor = Math.ceil(cursor / 5) * 5; // redondear a múltiplo de 5 min
 
     let modifiedCount = 0;
 
+    // 1. Sincronizar bloques fijos si cambiaron los ajustes (SENA, transporte, etc.)
+    if (!isWeekend) {
+      const formalStart = _toMin(s.scheduleStartTime);
+      const formalEnd = _toMin(s.scheduleEndTime);
+      const arrival = _toMin(s.arrivalTime);
+
+      for (const b of dayBlocks) {
+        if (b.status === 'completed' || b.status === 'failed') continue;
+        const label = (b.label ?? '').toLowerCase();
+
+        // Bloque SENA
+        if (label === 'sena' || label.includes('actividades formales')) {
+          if (b.startTime !== s.scheduleStartTime || b.endTime !== s.scheduleEndTime) {
+            b.startTime = s.scheduleStartTime;
+            b.endTime = s.scheduleEndTime;
+            b.duration = Math.max(15, formalEnd - formalStart);
+            modifiedCount++;
+          }
+        }
+        // Bloque de Transporte al SENA
+        else if (label.includes('transporte al sena') || label.includes('transporte hacia el sena')) {
+          const transportDur = b.duration || 45;
+          const targetStart = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur));
+          const targetEnd = s.scheduleStartTime;
+          if (b.startTime !== targetStart || b.endTime !== targetEnd) {
+            b.startTime = targetStart;
+            b.endTime = targetEnd;
+            b.duration = transportDur;
+            modifiedCount++;
+          }
+        }
+        // Bloque de Preparación para el SENA
+        else if (label.includes('preparación') && (label.includes('sena') || label.includes('formal'))) {
+          const prepDur = b.duration || 30;
+          const transportDur = 45;
+          const targetEnd = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur));
+          const targetStart = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur - prepDur));
+          if (b.startTime !== targetStart || b.endTime !== targetEnd) {
+            b.startTime = targetStart;
+            b.endTime = targetEnd;
+            b.duration = prepDur;
+            modifiedCount++;
+          }
+        }
+        // Bloque de Transporte de regreso
+        else if (label.includes('transporte de regreso')) {
+          if (b.startTime !== s.scheduleEndTime || b.endTime !== s.arrivalTime) {
+            b.startTime = s.scheduleEndTime;
+            b.endTime = s.arrivalTime;
+            b.duration = Math.max(15, arrival - formalEnd);
+            modifiedCount++;
+          }
+        }
+      }
+    }
+
+    // 2. Si es hoy, desplazar bloques pendientes que estén en el pasado respecto a la hora actual
+    const now = new Date();
+    const currentMinutes = isToday ? now.getHours() * 60 + now.getMinutes() : _toMin(s.wakeTime);
+    let cursor = Math.ceil((currentMinutes + 2) / 5) * 5;
+
+    // Ordenar bloques por hora de inicio
+    dayBlocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
+
     for (const b of dayBlocks) {
       const label = (b.label ?? '').toLowerCase();
-      // No desplazar bloques completados, fallados ni la jornada SENA
-      if (b.status === 'completed' || b.status === 'failed' || label.includes('sena')) {
+      // Ignorar bloques ya terminados o fijos
+      if (
+        b.status === 'completed' ||
+        b.status === 'failed' ||
+        label.includes('sena') ||
+        label.includes('transporte')
+      ) {
         const endMin = _toMin(b.endTime);
         if (endMin > cursor) cursor = endMin;
         continue;
       }
 
-      const bEndMin = _toMin(b.endTime);
-      // Si el bloque ya terminó en el pasado, no mover
-      if (bEndMin <= currentMinutes) continue;
+      if (isToday) {
+        const bEndMin = _toMin(b.endTime);
+        if (bEndMin <= currentMinutes) continue;
 
-      const bStartMin = _toMin(b.startTime);
-      // Si el bloque debía haber empezado antes del cursor actual:
-      if (bStartMin < cursor) {
-        const duration = b.duration;
-        const newStart = _toTime(cursor);
-        const newEnd = _toTime(cursor + duration);
+        const bStartMin = _toMin(b.startTime);
+        if (bStartMin < cursor) {
+          const duration = b.duration;
+          const newStart = _toTime(cursor);
+          const newEnd = _toTime(cursor + duration);
 
-        if (_toMin(newEnd) <= 23 * 60 + 59) {
-          b.startTime = newStart;
-          b.endTime = newEnd;
-          cursor += duration;
-          modifiedCount++;
+          if (_toMin(newEnd) <= 23 * 60 + 59) {
+            b.startTime = newStart;
+            b.endTime = newEnd;
+            cursor += duration;
+            modifiedCount++;
+          }
+        } else {
+          cursor = Math.max(cursor, _toMin(b.endTime));
         }
-      } else {
-        cursor = Math.max(cursor, _toMin(b.endTime));
       }
     }
 
-    if (modifiedCount > 0) {
-      this.reorganizeBlocks(date);
-      this.assignUnblockedTasks(date);
-      if (notificationService.hasPermission()) {
-        this.getBlocks(date).forEach(b => notificationService.scheduleBlockNotifications(b));
-      }
-      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    // 3. Ejecutar resolución de solapamientos en cascada
+    this.reorganizeBlocks(date);
+    this.assignUnblockedTasks(date);
+
+    if (notificationService.hasPermission()) {
+      this.getBlocks(date).forEach((b) => notificationService.scheduleBlockNotifications(b));
     }
 
-    return modifiedCount;
+    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    this.notifyListeners();
+
+    return Math.max(modifiedCount, 1);
   }
 
   // ─── Blocks ────────────────────────────────────────────────────────────────
