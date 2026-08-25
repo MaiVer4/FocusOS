@@ -111,11 +111,13 @@ export function todayStr(): string {
   return dateToStr(new Date());
 }
 
-/** Convierte HH:mm (24h) a formato 12h sin AM/PM, ej: "13:00" → "1:00" */
+/** Convierte HH:mm (24h) a formato 12h con AM/PM, ej: "13:00" → "1:00 p. m.", "08:00" → "8:00 a. m." */
 export function formatTo12h(time: string): string {
+  if (!time) return '';
   const [h, m] = time.split(':').map(Number);
+  const period = h >= 12 ? 'p. m.' : 'a. m.';
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${h12}:${String(m).padStart(2, '0')}`;
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`;
 }
 
 /** Formats a Date object as h:mm:ss (12h sin AM/PM) */

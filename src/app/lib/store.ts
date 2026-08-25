@@ -75,9 +75,18 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
   const wake = _toMin(s.wakeTime || '08:30');
   const sleep = _toMin(s.sleepTime || '23:00');
-  const formalStart = _toMin(s.scheduleStartTime || '12:00');
-  const formalEnd = _toMin(s.scheduleEndTime || '18:00');
-  const arrival = _toMin(s.arrivalTime || '18:45');
+
+  // Asegurar que el horario formal del SENA sea coherente (12:00 a 18:00 por defecto)
+  let formalStart = _toMin(s.scheduleStartTime || '12:00');
+  let formalEnd = _toMin(s.scheduleEndTime || '18:00');
+  let arrival = _toMin(s.arrivalTime || '18:45');
+
+  if (formalStart <= wake + 30 || formalEnd <= formalStart || formalEnd > sleep) {
+    formalStart = 12 * 60; // 12:00 PM
+    formalEnd = 18 * 60;   // 06:00 PM
+    arrival = 18 * 60 + 45; // 06:45 PM
+  }
+
   const deepDur = s.deepBlockDuration || 50;
   const deepMax = s.dailyDeepBlocksMax || 2;
   const morningExDur = s.morningExerciseDuration ?? 15;
@@ -90,15 +99,17 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
 
   // ═══ MAÑANA (08:30 en adelante) ═══
   // 1. Adaptación y rutina matutina (15 min)
-  c = _push(blocks, c, 15, 'rest', 'Despertar y adaptación', 'low');
+  if (c + 15 <= formalStart - 30) {
+    c = _push(blocks, c, 15, 'rest', 'Despertar y adaptación', 'low');
+  }
 
   // 2. Ejercicio matutino corto (15 min)
-  if (morningExDur > 0 && c + morningExDur < formalStart - 60) {
+  if (morningExDur > 0 && c + morningExDur <= formalStart - 60) {
     c = _push(blocks, c, morningExDur, 'exercise', 'Ejercicio matutino', 'high');
   }
 
   // 3. Desayuno (25 min)
-  if (c + 25 < formalStart - 45) {
+  if (c + 25 <= formalStart - 45) {
     c = _push(blocks, c, 25, 'rest', 'Desayuno y energía', 'low');
   }
 
@@ -119,21 +130,17 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     if (transportDur >= 15) {
       c = _push(blocks, c, transportDur, 'rest', 'Transporte al SENA', 'low');
     }
+  } else if (timeToFormal >= 15) {
+    c = _push(blocks, c, timeToFormal, 'rest', 'Preparación y transporte al SENA', 'low');
   }
 
   // ═══ FORMAL: scheduleStartTime → scheduleEndTime (SENA: 12:00 → 18:00) ═══
   if (formalEnd > formalStart) {
-    if (blocks.length > 0 && c > formalStart) {
-      const last = blocks[blocks.length - 1];
-      if (_toMin(last.endTime) > formalStart) {
-        last.endTime = s.scheduleStartTime;
-      }
-    }
     blocks.push({
       type: 'rest',
       label: 'SENA',
-      startTime: s.scheduleStartTime,
-      endTime: s.scheduleEndTime,
+      startTime: _toTime(formalStart),
+      endTime: _toTime(formalEnd),
       priority: 'high',
     });
   }
@@ -449,16 +456,18 @@ class Store {
       delete this.settings.geminiApiKey;
     }
 
-    // Migrar horario SENA: corregir solo valores legacy inválidos
-    // Si scheduleStartTime nunca fue establecido (legacy vacío o anterior a 06:00)
-    if (!this.settings.scheduleStartTime || this.settings.scheduleStartTime < '06:00') {
+    // Corregir horario SENA e incoherencias de horas si venían de versiones legacy
+    if (!this.settings.scheduleStartTime || this.settings.scheduleStartTime < '09:00' || this.settings.scheduleEndTime === '23:00' || this.settings.scheduleEndTime <= this.settings.scheduleStartTime) {
       this.settings.scheduleStartTime = '12:00';
-    }
-    // Si scheduleEndTime nunca fue establecido
-    if (!this.settings.scheduleEndTime || this.settings.scheduleEndTime < '06:00') {
       this.settings.scheduleEndTime = '18:00';
+      this.settings.arrivalTime = '18:45';
     }
-    // Asegurar arrivalTime coherente (después de scheduleEndTime)
+    if (!this.settings.wakeTime || this.settings.wakeTime < '06:00') {
+      this.settings.wakeTime = '08:30';
+    }
+    if (!this.settings.sleepTime) {
+      this.settings.sleepTime = '23:00';
+    }
     if (!this.settings.arrivalTime || this.settings.arrivalTime <= this.settings.scheduleEndTime) {
       this.settings.arrivalTime = '18:45';
     }
