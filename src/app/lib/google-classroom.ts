@@ -126,29 +126,29 @@ async function getCourseworkDetails(courseId: string, courseworkId: string): Pro
   );
 }
 
-// ─── Función principal: obtener tareas pendientes ─────────────────────────────
-
 /**
- * Obtiene las tareas pendientes.
- * 1. Lista submissions pendientes del usuario.
- * 2. Carga TODOS los coursework del curso en batch (incluye description).
- * 3. Cruza submissions con coursework para armar las tareas.
+ * Obtiene las tareas pendientes de Classroom.
+ * 1. Lista entregas del usuario y filtra SOLO pendientes ('NEW', 'CREATED', 'RECLAIMED_BY_STUDENT').
+ *    Cualquier tarea entregada ('TURNED_IN') o calificada ('RETURNED') se excluye automáticamente.
+ * 2. Aplica un filtro de ventana máxima de 40 días (ignora tareas cuya entrega o asignación exceda 40 días).
  */
 export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
   const courses = await getCourses();
   const tasks: ClassroomTask[] = [];
+  const MAX_DAYS_WINDOW = 40;
+  const now = Date.now();
 
   for (const course of courses) {
     const submissions = await getMySubmissions(course.id);
 
-    // Filtrar SOLO entregas verdaderamente pendientes (nunca entregadas)
+    // Filtrar SOLO entregas verdaderamente pendientes (NO entregadas ni calificadas)
     const pending = submissions.filter(
-      s => s.state === 'NEW' || s.state === 'CREATED'
+      s => s.state === 'NEW' || s.state === 'CREATED' || s.state === 'RECLAIMED_BY_STUDENT'
     );
 
     if (pending.length === 0) continue;
 
-    // Cargar todo el coursework del curso en UNA llamada (incluye description)
+    // Cargar todo el coursework del curso en UNA llamada batch
     const allCoursework = await listCoursework(course.id);
     const cwMap = new Map<string, ClassroomCoursework>();
     for (const cw of allCoursework) cwMap.set(cw.id, cw);
@@ -160,10 +160,9 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         cw = await getCourseworkDetails(course.id, sub.courseWorkId);
       }
 
-      // Si no podemos obtener los detalles del coursework, saltar
       if (!cw) continue;
 
-      // Fecha de asignación: creationTime del coursework o del submission
+      // Fecha de asignación
       const rawCreation = cw.creationTime ?? sub.creationTime ?? '';
       let assignedDate = '';
       if (rawCreation) {
@@ -175,15 +174,6 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
           assignedDate = `${yy}-${mm}-${dd}`;
         }
       }
-
-      // Solo incluir tareas ASIGNADAS en 2026 en adelante
-      const assignedYear = assignedDate
-        ? new Date(assignedDate + 'T00:00:00').getFullYear()
-        : (sub.creationTime ? new Date(sub.creationTime).getFullYear() : 0);
-      if (assignedYear < 2026) continue;
-
-      // Ficha 3231660 ADSO: solo tareas desde el 1 de marzo de 2026
-      if (course.name.includes('3231660') && assignedDate && assignedDate < '2026-03-01') continue;
 
       const title = cw.title;
       const description = cw.description ?? '';
@@ -197,7 +187,6 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         const hh = cw.dueTime?.hours ?? 23;
         const mm = cw.dueTime?.minutes ?? 59;
 
-        // Crear Date en UTC y convertir a local
         const utcDate = new Date(Date.UTC(y, m, d, hh, mm, 0));
         const localY = utcDate.getFullYear();
         const localM = String(utcDate.getMonth() + 1).padStart(2, '0');
@@ -208,14 +197,20 @@ export async function getClassroomPendingTasks(): Promise<ClassroomTask[]> {
         dueDateStr = `${localY}-${localM}-${localD}T${localHH}:${localMM}`;
       }
 
-      // No importar tareas vencidas hace 5 días o más
+      // ─── FILTRO 1: Ventana Máxima de 40 Días ────────────────────────────────
       if (dueDateStr) {
         const dueMs = new Date(dueDateStr).getTime();
-        const fiveDaysAgo = Date.now() - 5 * 24 * 60 * 60 * 1000;
-        if (dueMs < fiveDaysAgo) continue;
+        const diffDays = (dueMs - now) / (1000 * 60 * 60 * 24);
+        // Excluir si la fecha de entrega excede +40 días en el futuro o -40 días en el pasado
+        if (diffDays > MAX_DAYS_WINDOW || diffDays < -MAX_DAYS_WINDOW) continue;
+      } else if (assignedDate) {
+        const assignMs = new Date(assignedDate + 'T00:00:00').getTime();
+        const diffDaysAssigned = (now - assignMs) / (1000 * 60 * 60 * 24);
+        // Excluir si la tarea fue asignada hace más de 40 días
+        if (diffDaysAssigned > MAX_DAYS_WINDOW) continue;
       }
 
-      // Evitar duplicados
+      // Evitar duplicados en la lista de importación
       if (tasks.some(t => t.courseworkId === sub.courseWorkId)) continue;
 
       tasks.push({
