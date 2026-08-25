@@ -113,26 +113,38 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     c = _push(blocks, c, 25, 'rest', 'Desayuno y energía', 'low');
   }
 
-  // 4. Trabajo versátil / Estudio ligero (30 min)
-  const timeBeforeFormalPrep = formalStart - 75; // reservar 30m prep + 45m transporte
-  if (c + workDur <= timeBeforeFormalPrep) {
-    c = _push(blocks, c, workDur, 'light', 'Trabajo versátil / Estudio ligero', 'medium', true);
+  // Ventana matutina antes de prepararse para el SENA
+  const transportDur = 45;
+  const prepDur = 30;
+  const transportStart = formalStart - transportDur;
+  const prepStart = transportStart - prepDur;
+
+  const morningFree = prepStart - c;
+  if (morningFree >= 30) {
+    if (morningFree >= 120) {
+      // Entrada tardía (ej. 2:00 PM / 14:00): bloques de estudio ligero y proyectos
+      c = _push(blocks, c, 45, 'light', 'Estudio ligero matutino', 'medium', true);
+      c = _push(blocks, c, 10, 'rest', 'Pausa activa', 'low');
+      c = _push(blocks, c, 45, 'light', 'Proyectos personales / Trabajo', 'medium', true);
+      const lunchDur = Math.min(45, prepStart - c);
+      if (lunchDur >= 20) {
+        c = _push(blocks, c, lunchDur, 'rest', 'Almuerzo temprano', 'low');
+      }
+    } else if (morningFree >= 60) {
+      c = _push(blocks, c, 45, 'light', 'Trabajo versátil / Estudio ligero', 'medium', true);
+      if (prepStart - c >= 15) {
+        c = _push(blocks, c, prepStart - c, 'rest', 'Tiempo libre', 'low');
+      }
+    } else {
+      c = _push(blocks, c, morningFree, 'light', 'Repaso matutino', 'medium', true);
+    }
   }
 
-  // 5. Preparación (vestirse) y Transporte al SENA
-  const timeToFormal = formalStart - c;
-  if (timeToFormal >= 45) {
-    const prepDur = Math.min(30, timeToFormal - 30);
-    if (prepDur >= 15) {
-      c = _push(blocks, c, prepDur, 'rest', 'Vestirse y prepararse para el SENA', 'low');
-    }
-    const transportDur = formalStart - c;
-    if (transportDur >= 15) {
-      c = _push(blocks, c, transportDur, 'rest', 'Transporte al SENA', 'low');
-    }
-  } else if (timeToFormal >= 15) {
-    c = _push(blocks, c, timeToFormal, 'rest', 'Preparación y transporte al SENA', 'low');
+  // Preparación y Transporte al SENA (justo antes de la hora de entrada)
+  if (prepStart >= c) {
+    c = _push(blocks, prepStart, prepDur, 'rest', 'Vestirse y prepararse para el SENA', 'low');
   }
+  c = _push(blocks, transportStart, transportDur, 'rest', 'Transporte al SENA', 'low');
 
   // ═══ FORMAL: scheduleStartTime → scheduleEndTime (SENA: 12:00 → 18:00) ═══
   if (formalEnd > formalStart) {
@@ -994,25 +1006,47 @@ class Store {
    *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
    *  4. Los rest/low que no caben se eliminan.
    */
+  /**
+   * Reorganiza los bloques de un día para eliminar solapamientos.
+   * Lógica:
+   *  1. Los bloques completados/activos y los bloques fijos de rutina se fijan en su posición.
+   *  2. Los bloques pendientes mantienen su orden cronológico.
+   *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
+   *  4. Los rest/low que no caben se eliminan.
+   */
   reorganizeBlocks(date: string, anchorId?: string): void {
     const dayBlocks = this.getBlocks(date);
     if (dayBlocks.length <= 1) return;
 
     // Labels que no se mueven (bloques de horario fijo)
-    const fixedLabels = ['sena', 'actividades formales', 'transporte de regreso'];
+    const fixedLabels = [
+      'sena',
+      'actividades formales',
+      'transporte de regreso',
+      'transporte al sena',
+      'transporte hacia el sena',
+      'vestirse y prepararse',
+      'prepararse para el sena',
+      'preparación para el sena',
+      'preparación y transporte',
+    ];
     const isFixed = (b: Block) =>
-      b.status === 'completed' || b.status === 'active'
-      || fixedLabels.some(l => (b.label ?? '').toLowerCase().includes(l))
-      || b.id === anchorId;
+      b.status === 'completed' ||
+      b.status === 'active' ||
+      fixedLabels.some((l) => (b.label ?? '').toLowerCase().includes(l)) ||
+      b.id === anchorId;
 
     const fixed = dayBlocks.filter(isFixed);
-    const movable = dayBlocks.filter(b => !isFixed(b));
+    const movable = dayBlocks.filter((b) => !isFixed(b));
 
     // Ordenar movibles por startTime
     movable.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
     // Crear slots ocupados por bloques fijos
-    const occupied: Array<{ start: string; end: string }> = fixed.map(b => ({ start: b.startTime, end: b.endTime }));
+    const occupied: Array<{ start: string; end: string }> = fixed.map((b) => ({
+      start: b.startTime,
+      end: b.endTime,
+    }));
     occupied.sort((a, b) => a.start.localeCompare(b.start));
 
     const placed: Block[] = [...fixed];
@@ -1021,30 +1055,14 @@ class Store {
     for (const block of movable) {
       let candidate = block.startTime;
 
-      // Si hay brecha con el bloque anterior, pegar al final del anterior
-      const allPlaced = [...occupied].sort((a, b) => a.start.localeCompare(b.start));
-      // Encontrar el slot que termina justo antes o en el candidate
-      let prevEnd: string | null = null;
-      for (const occ of allPlaced) {
-        if (occ.end <= candidate) prevEnd = occ.end;
-      }
-      // Cerrar brecha: si hay un hueco entre el bloque anterior y este, pegarlo
-      if (prevEnd && prevEnd < candidate) {
-        // Verificar que no haya un bloque fijo en medio
-        const gapOccupied = allPlaced.some(occ => occ.start > prevEnd! && occ.start < candidate);
-        if (!gapOccupied) {
-          candidate = prevEnd;
-        }
-      }
-
-      // Resolver solapamientos con bloques fijos (saltar después)
+      // Resolver solapamientos con bloques ya ubicados (fijos y movibles previos)
       let changed = true;
       while (changed) {
         changed = false;
         for (const occ of occupied) {
           const candidateEnd = addMinutesToTime(candidate, block.duration);
           if (candidate < occ.end && candidateEnd > occ.start) {
-            candidate = occ.end; // pegar justo al final del fijo, sin gap
+            candidate = occ.end; // pegar justo al final del bloque que solapaba
             changed = true;
           }
         }
@@ -1070,23 +1088,25 @@ class Store {
     }
 
     // Aplicar cambios
-    const placedIds = new Set(placed.map(b => b.id));
-    this.blocks = this.blocks.filter(b => b.date !== date || placedIds.has(b.id));
+    const placedIds = new Set(placed.map((b) => b.id));
+    this.blocks = this.blocks.filter((b) => b.date !== date || placedIds.has(b.id));
     for (const p of placed) {
-      this.blocks = this.blocks.map(b =>
-        b.id === p.id ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration, _v: Date.now() } : b
+      this.blocks = this.blocks.map((b) =>
+        b.id === p.id
+          ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration, _v: Date.now() }
+          : b
       );
     }
-    this.blocks = this.blocks.filter(b => !idsToRemove.has(b.id));
+    this.blocks = this.blocks.filter((b) => !idsToRemove.has(b.id));
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
   }
 
   /**
    * Reorganiza los bloques de un día de forma elástica e inteligente:
-   *  1. Sincroniza bloques fijos (SENA, transporte, rutinas) si la configuración de horarios cambió.
+   *  1. Sincroniza bloques fijos (SENA, transporte, preparación) con la configuración de horarios actual.
    *  2. Si es el día de hoy, desplaza bloques que debían haber empezado antes respetando la hora actual.
-   *  3. Resuelve solapamientos y compacta los bloques sin dejar huecos muertos.
-   *  4. Reasigna tareas pendientes a bloques disponibles.
+   *  3. Resuelve solapamientos y compacta los bloques sin solapar ninguna franja bloqueada.
+   *  4. Reasigna tareas reales pendientes a bloques disponibles.
    */
   reorganizeFromNow(date: string): number {
     const s = this.settings;
@@ -1105,6 +1125,11 @@ class Store {
       const formalEnd = _toMin(s.scheduleEndTime);
       const arrival = _toMin(s.arrivalTime);
 
+      const transportDur = 45;
+      const prepDur = 30;
+      const transportStart = formalStart - transportDur;
+      const prepStart = transportStart - prepDur;
+
       for (const b of dayBlocks) {
         if (b.status === 'completed' || b.status === 'failed') continue;
         const label = (b.label ?? '').toLowerCase();
@@ -1120,8 +1145,7 @@ class Store {
         }
         // Bloque de Transporte al SENA
         else if (label.includes('transporte al sena') || label.includes('transporte hacia el sena')) {
-          const transportDur = b.duration || 45;
-          const targetStart = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur));
+          const targetStart = _toTime(transportStart);
           const targetEnd = s.scheduleStartTime;
           if (b.startTime !== targetStart || b.endTime !== targetEnd) {
             b.startTime = targetStart;
@@ -1131,11 +1155,12 @@ class Store {
           }
         }
         // Bloque de Preparación para el SENA
-        else if (label.includes('preparación') && (label.includes('sena') || label.includes('formal'))) {
-          const prepDur = b.duration || 30;
-          const transportDur = 45;
-          const targetEnd = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur));
-          const targetStart = _toTime(Math.max(_toMin(s.wakeTime), formalStart - transportDur - prepDur));
+        else if (
+          (label.includes('preparar') || label.includes('vestirse')) &&
+          (label.includes('sena') || label.includes('formal'))
+        ) {
+          const targetStart = _toTime(prepStart);
+          const targetEnd = _toTime(transportStart);
           if (b.startTime !== targetStart || b.endTime !== targetEnd) {
             b.startTime = targetStart;
             b.endTime = targetEnd;
@@ -1170,7 +1195,9 @@ class Store {
         b.status === 'completed' ||
         b.status === 'failed' ||
         label.includes('sena') ||
-        label.includes('transporte')
+        label.includes('transporte') ||
+        label.includes('vestirse') ||
+        label.includes('preparar')
       ) {
         const endMin = _toMin(b.endTime);
         if (endMin > cursor) cursor = endMin;

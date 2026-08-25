@@ -585,6 +585,7 @@ export function Planner() {
                     const moved = store.reorganizeFromNow(selectedDate);
                     if (moved > 0) {
                       refreshData();
+                      alert(`¡Horario sincronizado! Se reorganizaron los bloques con la rutina y hora actual.`);
                     } else {
                       alert('Tus bloques ya están al día con la rutina y hora actual.');
                     }
