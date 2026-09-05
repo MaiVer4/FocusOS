@@ -101,25 +101,58 @@ function filterChatModels(models: string[]): string[] {
 }
 
 /** Extrae y sanitiza JSON de respuestas de IA, removiendo tags de pensamiento <think> y markdown */
-export function extractJSON<T = any>(raw: string): T {
-  let cleaned = raw.trim();
+export function extractJSON<T = any>(raw: unknown): T {
+  const source = typeof raw === 'string' ? raw : JSON.stringify(raw ?? '');
+  let cleaned = source.trim();
+
+  if (!cleaned) {
+    throw new Error('La IA respondió con un contenido vacío.');
+  }
+
   // Quitar bloques de pensamiento <think>...</think>
   cleaned = cleaned.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-  // Quitar markdown ```json ... ```
+
+  // Quitar markdown ```json ... ``` o ``` ... ```
   cleaned = cleaned
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
     .replace(/\s*```$/i, '')
     .trim();
 
-  // Aislar el objeto JSON delimitado por '{' y '}'
+  if (!cleaned) {
+    throw new Error('La IA respondió con contenido vacío tras limpiar la respuesta.');
+  }
+
+  const candidates = new Set<string>();
+  candidates.add(cleaned);
+
+  // Si hay ruido antes/después del JSON, intentar aislar el bloque principal
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace >= firstBrace) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
+    candidates.add(cleaned.substring(firstBrace, lastBrace + 1));
   }
 
-  return JSON.parse(cleaned);
+  // Fallback adicional: probar todos los rangos { ... } válidos del texto
+  for (let start = cleaned.indexOf('{'); start !== -1; start = cleaned.indexOf('{', start + 1)) {
+    for (let end = cleaned.lastIndexOf('}'); end > start; end = cleaned.lastIndexOf('}', end - 1)) {
+      const candidate = cleaned.substring(start, end + 1).trim();
+      if (candidate.length > 2) {
+        candidates.add(candidate);
+      }
+      break;
+    }
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate) as T;
+    } catch {
+      // Probar siguiente candidato, si existe uno mejor aislado
+    }
+  }
+
+  throw new Error('La IA respondió con un formato JSON inválido o incompleto.');
 }
 
 let _geminiClient: GoogleGenerativeAI | null = null;
