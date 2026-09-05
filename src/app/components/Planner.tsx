@@ -73,6 +73,7 @@ export function Planner() {
   const [confirmAction, setConfirmAction] = useState<{ message: string; onConfirm: () => void } | null>(null);
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiInsights, setAiInsights] = useState<string[] | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
 
   const refreshData = () => {
     setBlocks(store.getBlocks(selectedDate).sort((a, b) => a.startTime.localeCompare(b.startTime)));
@@ -183,6 +184,7 @@ export function Planner() {
     if (aiGenerating) return;
     setAiGenerating(true);
     setAiInsights(null);
+    setAiError(null);
     try {
       const result = await store.generateWithAI(selectedDate);
       if (result.insights.length > 0) {
@@ -190,7 +192,10 @@ export function Planner() {
       }
       refreshData();
     } catch (err: unknown) {
-      alert((err as Error).message ?? 'Error al generar con IA');
+      const message = err instanceof Error ? err.message : 'No se pudo generar el horario con IA.';
+      setAiError(message.includes('JSON') || message.includes('indicó') || message.includes('respondi'))
+        ? 'La IA respondió con un formato inválido. Intenta de nuevo en unos segundos.'
+        : message;
     } finally {
       setAiGenerating(false);
     }
@@ -567,7 +572,7 @@ export function Planner() {
               <button
                 onClick={() => {
                   if (!store.isAIEnabled()) {
-                    alert('Configura tu API key de IA en Settings → Inteligencia Artificial');
+                    setAiError('Configura tu API key de IA en Settings → Inteligencia Artificial');
                     return;
                   }
                   handleAIGenerate();
@@ -605,6 +610,12 @@ export function Planner() {
               </button>
             </div>
           </div>
+
+          {aiError && (
+            <div className="bg-red-950/40 border border-red-500/30 rounded-xl p-3 text-sm text-red-200">
+              <span className="font-semibold">IA no disponible:</span> {aiError}
+            </div>
+          )}
 
           {blocks.length === 0 ? (
             <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-8 text-center text-zinc-500 space-y-2">
@@ -1027,6 +1038,13 @@ export function Planner() {
           }}
           onCancel={() => setConfirmAction(null)}
         />
+      )}
+
+      {/* AI Error Message */}
+      {aiError && (
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-red-900 text-red-400 rounded-xl px-4 py-3 text-sm shadow-lg">
+          {aiError}
+        </div>
       )}
     </div>
   );
