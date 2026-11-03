@@ -11,7 +11,7 @@
 
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { Block, BlockType, Task, UserSettings, DailyMetrics, MealId, MealCustomOverride } from './types';
-import { isRoutineLabel } from './helpers';
+import { isRoutineLabel, getDayOfWeek } from './helpers';
 import { LearnedProfile } from './learning-engine';
 import {
   CLINICAL_PROFILE,
@@ -483,30 +483,35 @@ export async function generateAISchedule(
   existingBlocks: Block[]
 ): Promise<AIScheduleResult> {
   const dayNames = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
-  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  const strictDow = getDayOfWeek(date);
+  const isWeekend = strictDow === 0 || strictDow === 6;
+  const isWeekday = strictDow >= 1 && strictDow <= 5;
   const workoutSlot = settings.workoutSlot ?? 'morning';
-  const split = getScheduledSplitForDayOfWeek(dayOfWeek);
+  const split = getScheduledSplitForDayOfWeek(strictDow);
   const splitInfo = WORKOUT_SPLITS[split];
 
   const prompt = `Eres un asistente clínico y de productividad experto. Genera un horario diario optimizado para el usuario respetando su protocolo de hipertrofia (47kg -> 54kg), escoliosis y horario del SENA.
 
-${buildContextPrompt(settings, profile, recentMetrics, dayOfWeek)}
+${buildContextPrompt(settings, profile, recentMetrics, strictDow)}
 
 ${buildTasksPrompt(tasks)}
 
 ${buildExistingBlocksPrompt(existingBlocks)}
 
 === INSTRUCCIONES ===
-Genera un horario optimizado para: ${date} (${dayNames[dayOfWeek]})
+Genera un horario optimizado para: ${date} (${dayNames[strictDow]})
+CLASIFICACIÓN ESTRICTA: ${isWeekend ? '🌴 FIN DE SEMANA (SÁBADO O DOMINGO - SIN SENA)' : '🏫 ENTRE SEMANA (LUNES A VIERNES - FORMACIÓN SENA OBLIGATORIA)'}
 
 REGLAS ESTRICTAS DE HORARIO (OBLIGATORIO):
 - ❌ PROHIBIDO crear bloques que empiecen ANTES de ${settings.wakeTime} o terminen DESPUÉS de ${settings.sleepTime}
 - ❌ PROHIBIDO hacer doble jornada de ejercicio: programa UNA SOLA sesión de "exercise" de ~50 min llamada "Calistenia: ${splitInfo.shortTitle}" (${workoutSlot === 'morning' ? 'en la mañana de 09:00 a 09:50' : 'en la tarde de 18:45 a 19:35'}).
 ${
   isWeekend
-    ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente`
-    : `- ❌ PROHIBIDO crear bloques de estudio o ejercicio entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA
-- ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte
+    ? `- ✅ Es fin de semana: todo el rango ${settings.wakeTime} - ${settings.sleepTime} está disponible libremente sin formación escolar/SENA.`
+    : `- 🚨 DÍA ENTRE SEMANA OBLIGATORIO:
+- ❌ PROHIBIDO rotular bloques como "Proyecto personal de fin de semana", "Mañana libre" o "Tiempo libre matutino".
+- ❌ PROHIBIDO crear bloques de estudio o ejercicio entre ${settings.scheduleStartTime} y ${settings.scheduleEndTime} — el usuario está en el SENA.
+- ❌ PROHIBIDO crear bloques de estudio entre ${settings.scheduleEndTime} y ${settings.arrivalTime} — el usuario está en transporte.
 - ✅ Incluye Desayuno (07:30), Recarga Post-Entreno Pre-SENA (10:30), Cena completa + Corte de agua (20:00-20:30) y Desconexión + Protocolo de sueño (22:00-22:30).`
 }
 

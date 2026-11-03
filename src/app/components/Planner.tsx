@@ -20,6 +20,10 @@ import {
   formatDateDisplay,
   generateUUID,
   cleanBlockLabel,
+  getDayOfWeek,
+  isWeekendDay,
+  isWeekdayDay,
+  getDayNameSpanish,
 } from '../lib/helpers';
 import {
   Plus,
@@ -171,9 +175,12 @@ export function Planner() {
   const handlePlanDayClick = () => {
     if (planningLoading) return;
 
+    const isWk = isWeekendDay(selectedDate);
+    const dayTypeLabel = isWk ? 'FIN DE SEMANA (Sin SENA)' : 'DÍA ENTRE SEMANA (Jornada SENA 12:00 a 18:00)';
+
     if (blocks.length > 0) {
       setConfirmAction({
-        message: `Ya tienes bloques creados para el ${formatDateDisplay(selectedDate)}. ¿Deseas reemplazar el horario actual por una nueva rutina generada?`,
+        message: `Ya tienes bloques creados para el ${formatDateDisplay(selectedDate)}. ¿Deseas reemplazar el horario actual por una nueva rutina de ${dayTypeLabel}?`,
         onConfirm: () => executePlanDay(true),
       });
       return;
@@ -514,14 +521,59 @@ export function Planner() {
       )}
 
       {/* Date Selector */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-        <label className="block text-xs text-zinc-500 mb-2 uppercase tracking-wider">Fecha</label>
-        <input
-          type="date"
-          value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
-          className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500 [color-scheme:dark]"
-        />
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 space-y-3">
+        <div>
+          <label className="block text-xs text-zinc-500 mb-2 uppercase tracking-wider">Fecha</label>
+          <input
+            type="date"
+            value={selectedDate}
+            onChange={(e) => setSelectedDate(e.target.value)}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-xl px-4 py-3 text-white focus:outline-none focus:ring-2 focus:ring-red-500 [color-scheme:dark]"
+          />
+        </div>
+
+        {/* Indicador Estricto de Tipo de Día */}
+        {isWeekdayDay(selectedDate) ? (
+          <div className="bg-gradient-to-r from-emerald-950/40 via-zinc-900/90 to-zinc-900 border border-emerald-500/30 rounded-xl p-3 flex items-start gap-2.5">
+            <div className="p-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 shrink-0 mt-0.5">
+              <GraduationCap className="size-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-emerald-300 uppercase tracking-wide">
+                  Día Entre Semana ({getDayNameSpanish(selectedDate)})
+                </span>
+                <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                  Jornada SENA Activa
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-1 leading-snug">
+                SENA obligatorio: 12:00 a 18:00 (Almuerzo 14:00) · Calistenia matutina · Estudio profundo nocturno tras regreso (18:45).
+              </p>
+            </div>
+          </div>
+        ) : (
+          <div className="bg-gradient-to-r from-amber-950/40 via-zinc-900/90 to-zinc-900 border border-amber-500/30 rounded-xl p-3 flex items-start gap-2.5">
+            <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 shrink-0 mt-0.5">
+              <CalendarDays className="size-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-amber-300 uppercase tracking-wide">
+                  Fin de Semana ({getDayNameSpanish(selectedDate)})
+                </span>
+                <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full font-semibold">
+                  Sin SENA
+                </span>
+              </div>
+              <p className="text-[11px] text-zinc-400 mt-1 leading-snug">
+                {getDayOfWeek(selectedDate) === 6
+                  ? 'Sábado: Piernas y Core · Proyectos en Casa o Modo Libre flexible con checklist biológico.'
+                  : 'Domingo: Descanso activo · Movilidad torácica para escoliosis y planificación de la semana.'}
+              </p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -571,14 +623,14 @@ export function Planner() {
                 onClick={handlePlanDayClick}
                 disabled={planningLoading}
                 className="px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold text-white transition-[background-color,opacity,transform] duration-150 shadow-sm flex items-center gap-1.5 enabled:active:scale-[0.96]"
-                title="Generar rutina diaria inteligente (IA con respaldo clínico automático)"
+                title={`Generar rutina estricta para ${isWeekdayDay(selectedDate) ? 'Día Entre Semana (con SENA)' : 'Fin de Semana (Sin SENA)'}`}
               >
                 {planningLoading ? (
                   <Loader2 className="size-3.5 motion-safe:animate-spin" />
                 ) : (
                   <Sparkles className="size-3.5" />
                 )}
-                Planificar Día
+                <span>Planificar {isWeekdayDay(selectedDate) ? 'Día SENA' : 'Fin de Semana'}</span>
               </button>
               {blocks.length > 0 && (
                 <button

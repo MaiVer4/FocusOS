@@ -197,10 +197,69 @@ export function addMinutesToDatetime(datetimeStr: string, minutes: number): stri
   return `${y}-${mo}-${d}T${h}:${m}`;
 }
 
+/**
+ * Parsea estrictamente la fecha en formato YYYY-MM-DD o ISO a los componentes [año, mes, día] locales,
+ * evitando desfases de zona horaria o interpretaciones UTC medianoche.
+ */
+export function parseLocalDate(dateStr: string): { year: number; month: number; day: number } {
+  if (!dateStr) {
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+  }
+  const clean = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr.trim();
+  const parts = clean.split('-').map(Number);
+  if (parts.length >= 3 && !isNaN(parts[0]) && !isNaN(parts[1]) && !isNaN(parts[2])) {
+    return { year: parts[0], month: parts[1], day: parts[2] };
+  }
+  const now = new Date();
+  return { year: now.getFullYear(), month: now.getMonth() + 1, day: now.getDate() };
+}
+
+/**
+ * Retorna el día de la semana estrictamente local (0=domingo, 1=lunes, ..., 6=sábado)
+ * sin riesgo de conversión UTC que desplace el día.
+ */
+export function getDayOfWeek(dateStr: string): number {
+  const { year, month, day } = parseLocalDate(dateStr);
+  return new Date(year, month - 1, day, 12, 0, 0).getDay();
+}
+
+/**
+ * Retorna el nombre en español del día de la semana para un string YYYY-MM-DD
+ */
+export function getDayNameSpanish(dateStr: string): string {
+  const dow = getDayOfWeek(dateStr);
+  const names = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+  return names[dow] ?? 'día';
+}
+
+/**
+ * Retorna verdadero si es fin de semana (sábado=6 o domingo=0)
+ */
+export function isWeekendDay(dateStr: string): boolean {
+  const dow = getDayOfWeek(dateStr);
+  return dow === 0 || dow === 6;
+}
+
+/**
+ * Retorna verdadero si es día entre semana (lunes a viernes, 1 a 5)
+ */
+export function isWeekdayDay(dateStr: string): boolean {
+  const dow = getDayOfWeek(dateStr);
+  return dow >= 1 && dow <= 5;
+}
+
 /** Formatea un string de fecha (YYYY-MM-DD) o fecha-hora (YYYY-MM-DDTHH:mm) para mostrar */
 export function formatDateDisplay(dateStr: string, options?: Intl.DateTimeFormatOptions): string {
+  if (!dateStr) return '';
   const hasTime = dateStr.includes('T') && dateStr.length > 10;
-  const date = hasTime ? new Date(dateStr) : new Date(dateStr + 'T00:00:00');
+  let date: Date;
+  if (hasTime) {
+    date = new Date(dateStr);
+  } else {
+    const { year, month, day } = parseLocalDate(dateStr);
+    date = new Date(year, month - 1, day, 12, 0, 0);
+  }
   const dateOptions = options ?? { weekday: 'short', day: 'numeric', month: 'short' };
   const formatted = date.toLocaleDateString('es-CO', dateOptions);
   if (hasTime) {

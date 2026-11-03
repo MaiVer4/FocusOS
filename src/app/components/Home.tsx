@@ -11,6 +11,7 @@ import {
   todayStr,
   cleanBlockLabel,
   getCircadianPhase,
+  isWeekendDay,
 } from '../lib/helpers';
 import { triggerHaptic } from '../lib/notifications';
 import {
@@ -174,7 +175,7 @@ export function Home() {
   const bioScore = store.calculateBiologicalScore(today);
   const focusScore = store.calculateFocusScore(today);
   const isOutOfRoutine = !!healthLog.outOfRoutine;
-  const isWeekend = currentTime.getDay() === 0 || currentTime.getDay() === 6;
+  const isWeekend = isWeekendDay(today);
 
   // Tiempo restante del bloque activo
   const getRemainingMinutes = () => {

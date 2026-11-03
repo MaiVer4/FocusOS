@@ -14,6 +14,7 @@
  */
 
 import { Block, BlockType, Task } from './types';
+import { getDayOfWeek } from './helpers';
 
 // ─── Tipos del perfil aprendido ──────────────────────────────────────────────
 
@@ -197,7 +198,7 @@ export function analyzeHistory(blocks: Block[], tasks: Task[]): LearnedProfile {
   // ─── Procesar cada bloque terminado ─────────────────────────────────────
   for (const block of terminal) {
     const slot = timeToSlot(block.startTime);
-    const dayOfWeek = new Date(block.date + 'T12:00:00').getDay();
+    const dayOfWeek = getDayOfWeek(block.date);
     const isCompleted = block.status === 'completed';
 
     // — Slot stats —

@@ -14,7 +14,19 @@ import {
   SleepChecklistState,
   WeekendPlanMode,
 } from './types';
-import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, cleanBlockLabel, generateUUID } from './helpers';
+import {
+  addMinutesToTime,
+  dateToStr,
+  durationBetween,
+  todayStr,
+  isRoutineLabel,
+  cleanBlockLabel,
+  generateUUID,
+  getDayOfWeek,
+  isWeekendDay,
+  isWeekdayDay,
+  parseLocalDate,
+} from './helpers';
 import { cloudSync } from './cloud-sync';
 import { notificationService } from './notifications';
 import {
@@ -527,7 +539,10 @@ function generateSundayTemplate(
   return blocks;
 }
 
-/** Retorna la plantilla adecuada según el día de la semana (0=dom … 6=sáb) */
+/** 
+ * Retorna la plantilla adecuada según el día de la semana (0=dom … 6=sáb).
+ * Regla estricta: Lunes a Viernes (1..5) NUNCA pueden recibir plantillas de fin de semana.
+ */
 function getTemplateForDay(
   dayOfWeek: number,
   settings: UserSettings,
@@ -536,9 +551,16 @@ function getTemplateForDay(
   weekendMode?: WeekendPlanMode,
   isOutOfRoutine?: boolean
 ): TemplateBlock[] {
+  // Lunes a Viernes: OBLIGATORIAMENTE plantilla con jornada SENA (12:00 - 18:00) y rutina escolar
+  if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+    return generateWeekdayTemplate(settings, dayOfWeek, workoutLogs, dateStr);
+  }
+  // Fin de semana estricto
   if (dayOfWeek === 6) return generateSaturdayTemplate(settings, weekendMode, isOutOfRoutine);
   if (dayOfWeek === 0) return generateSundayTemplate(settings, weekendMode, isOutOfRoutine);
-  return generateWeekdayTemplate(settings, dayOfWeek, workoutLogs, dateStr);
+  
+  // Respaldo seguro ante cualquier día anómalo
+  return generateWeekdayTemplate(settings, 1, workoutLogs, dateStr);
 }
 
 // ─── Smart Task Scheduling ──────────────────────────────────────────────────
@@ -1012,13 +1034,19 @@ class Store {
   }
 
   setWeekendPlanMode(date: string, mode: WeekendPlanMode): Block[] {
+    const dayOfWeek = getDayOfWeek(date);
+    // Guardia estricta: No aplicar plantillas de fin de semana en días entre semana
+    if (dayOfWeek >= 1 && dayOfWeek <= 5) {
+      console.warn(`[Store] setWeekendPlanMode ignorado: ${date} es día entre semana (lunes a viernes).`);
+      return this.getBlocks(date);
+    }
+
     this.updateHealthLog(date, { weekendMode: mode, outOfRoutine: mode === 'free' });
     const dayBlocks = this.getBlocks(date);
     const hasCompleted = dayBlocks.some((b) => b.status === 'completed');
 
     if (!hasCompleted) {
       this.blocks = this.blocks.filter((b) => b.date !== date);
-      const dayOfWeek = new Date(date + 'T12:00:00').getDay();
       const template = getTemplateForDay(
         dayOfWeek,
         this.settings,
@@ -1384,15 +1412,16 @@ class Store {
     const existing = this.getBlocks(date);
     if (existing.length > 0) return [];
 
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const dayOfWeek = getDayOfWeek(date);
+    const isWk = dayOfWeek === 0 || dayOfWeek === 6;
     const hLog = this.getHealthLog(date);
     const template = getTemplateForDay(
       dayOfWeek,
       this.settings,
       this.workoutLogs,
       date,
-      hLog.weekendMode,
-      hLog.outOfRoutine
+      isWk ? hLog.weekendMode : undefined,
+      isWk ? hLog.outOfRoutine : false
     );
 
     const tasks = this.getTasksForDayWithCarryOver(date);
@@ -1558,7 +1587,7 @@ class Store {
 
   reorganizeFromNow(date: string): number {
     const s = this.settings;
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const dayOfWeek = getDayOfWeek(date);
     const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
     const isToday = date === todayStr();
 
@@ -2041,7 +2070,7 @@ class Store {
     }
 
     const { provider, apiKey } = this.getAIConfig();
-    const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+    const dayOfWeek = getDayOfWeek(date);
     const tasks = this.getTasksForDayWithCarryOver(date);
     const recentMetrics = this.metrics.slice(-14);
 
@@ -2080,11 +2109,27 @@ class Store {
         const bStart = sh * 60 + sm;
         const bEnd = eh * 60 + em;
         const labelLower = (aiBlock.label ?? '').toLowerCase();
+
+        // Eliminar bloques típicos de fin de semana que no corresponden a un día entre semana
+        const isWeekendArtifact =
+          labelLower.includes('proyecto personal') ||
+          labelLower.includes('mañana libre') ||
+          labelLower.includes('tiempo libre') ||
+          labelLower.includes('descanso familiar') ||
+          labelLower.includes('fin de semana');
+        if (isWeekendArtifact) continue;
+
         const isFormalOrTransport =
           labelLower.includes('sena') ||
           labelLower.includes('formal') ||
           labelLower.includes('transporte');
         if (isFormalOrTransport || (bStart < arrivalMin && bEnd > formalStartMin)) {
+          continue;
+        }
+      } else {
+        // En fin de semana, descartar bloques del SENA si la IA los generó por error
+        const labelLower = (aiBlock.label ?? '').toLowerCase();
+        if (labelLower.includes('sena') || labelLower.includes('transporte al sena')) {
           continue;
         }
       }

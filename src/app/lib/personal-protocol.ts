@@ -1,4 +1,5 @@
 import { DailyWorkoutLog, MealCustomOverride, MealId, WorkoutSplitType } from './types';
+import { getDayOfWeek, parseLocalDate } from './helpers';
 
 // ─── Diagnóstico Clínico, Postural y Metabólico ──────────────────────────────
 
@@ -318,13 +319,17 @@ export function evaluateBiomechanicalGuard(
   dateStr: string,
   workoutLogs: DailyWorkoutLog[]
 ): BiomechanicalGuardAssessment {
-  const refDate = new Date(dateStr + 'T12:00:00');
-  const dayOfWeek = refDate.getDay();
+  const dayOfWeek = getDayOfWeek(dateStr);
   const scheduledSplit = getScheduledSplitForDayOfWeek(dayOfWeek);
 
+  const { year, month, day } = parseLocalDate(dateStr);
+  const refDate = new Date(year, month - 1, day, 12, 0, 0);
   const sevenDaysAgo = new Date(refDate);
   sevenDaysAgo.setDate(refDate.getDate() - 7);
-  const startIso = sevenDaysAgo.toISOString().split('T')[0];
+  const sy = sevenDaysAgo.getFullYear();
+  const sm = String(sevenDaysAgo.getMonth() + 1).padStart(2, '0');
+  const sd = String(sevenDaysAgo.getDate()).padStart(2, '0');
+  const startIso = `${sy}-${sm}-${sd}`;
 
   const recentCompleted = workoutLogs.filter(
     (l) => l.date >= startIso && l.date < dateStr && l.completed
