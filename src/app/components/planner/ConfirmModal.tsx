@@ -21,14 +21,14 @@ export function ConfirmModal({
           <button
             type="button"
             onClick={onCancel}
-            className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+            className="flex-1 py-2.5 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[background-color,transform] duration-150"
           >
             {cancelLabel}
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 rounded-xl font-semibold text-sm transition-colors"
+            className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[background-color,transform] duration-150"
           >
             {confirmLabel}
           </button>

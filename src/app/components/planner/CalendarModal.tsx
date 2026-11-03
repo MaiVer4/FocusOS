@@ -53,7 +53,7 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto overscroll-contain">
         <div className="flex items-center gap-2 mb-4">
           <CalendarDays className="size-5 text-blue-400" />
           <h3 className="text-xl font-bold">Google Calendar</h3>
@@ -69,14 +69,14 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={handleFetch}
-                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150 flex items-center justify-center gap-2"
               >
                 <CalendarDays className="size-4" /> Obtener eventos
               </button>
@@ -87,7 +87,7 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
         {/* Cargando */}
         {loading && (
           <div className="flex flex-col items-center gap-3 py-8">
-            <Loader2 className="size-8 animate-spin text-blue-400" />
+            <Loader2 className="size-8 motion-safe:animate-spin text-blue-400" />
             <p className="text-xs text-zinc-400">Obteniendo eventos del calendario...</p>
           </div>
         )}
@@ -102,14 +102,14 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cerrar
               </button>
               <button
                 type="button"
                 onClick={handleFetch}
-                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Reintentar
               </button>
@@ -124,7 +124,7 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
               {events.filter(e => e.selected).length} de {events.length} seleccionados
             </p>
 
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-72 overflow-y-auto overscroll-contain pr-1">
               {events.map((ev, idx) => (
                 <label
                   key={ev.id}
@@ -177,7 +177,7 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cancelar
               </button>
@@ -185,7 +185,7 @@ export function CalendarModal({ onImport, onClose }: CalendarModalProps) {
                 type="button"
                 onClick={handleCreateItems}
                 disabled={events.every(e => !e.selected)}
-                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Importar {events.filter(e => e.selected).length} tarea{events.filter(e => e.selected).length !== 1 ? 's' : ''}
               </button>

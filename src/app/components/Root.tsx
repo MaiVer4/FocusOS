@@ -67,7 +67,7 @@ export function Root() {
     <div className="min-h-screen bg-zinc-950 text-white flex flex-col max-w-md mx-auto relative overflow-x-hidden">
       {/* Sync indicator — Modern Pill */}
       <div
-        className={`sticky top-2 z-50 px-4 transition-all duration-500 ease-out ${
+        className={`sticky top-2 z-50 px-4 transition-[opacity,transform] duration-300 ease-out ${
           showBar ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4 pointer-events-none'
         }`}
       >
@@ -75,13 +75,13 @@ export function Root() {
           {/* Animated dot */}
           <span className="relative flex h-2 w-2">
             {cfg.pulse && (
-              <span className={`absolute inset-0 rounded-full ${cfg.colors.replace('text-', 'bg-')} opacity-75 animate-ping`} />
+              <span className={`absolute inset-0 rounded-full ${cfg.colors.replace('text-', 'bg-')} opacity-75 motion-safe:animate-ping`} />
             )}
             <span className={`relative inline-flex h-2 w-2 rounded-full ${cfg.colors.replace('text-', 'bg-')}`} />
           </span>
 
           {/* Icon */}
-          <StatusIcon className={`size-3.5 ${cfg.colors} ${cfg.pulse ? 'animate-spin' : ''}`} />
+          <StatusIcon className={`size-3.5 ${cfg.colors} ${cfg.pulse ? 'motion-safe:animate-spin' : ''}`} />
 
           {/* Label */}
           <span className={`text-[11px] font-semibold tracking-wider uppercase ${cfg.colors}`}>
@@ -96,23 +96,23 @@ export function Root() {
 
       {/* Floating Glassmorphism Bottom Dock */}
       <nav className="fixed bottom-3 left-3 right-3 max-w-md mx-auto z-40">
-        <div className="glass-dock rounded-2xl p-1.5 flex items-center justify-between border border-white/[0.08] shadow-2xl">
+        <div className="glass-dock rounded-[18px] p-1.5 flex items-center justify-between border border-white/[0.08] shadow-2xl">
           {NAV_ITEMS.map(({ to, icon: Icon, label }) => {
             const active = isActive(to);
             return (
               <Link
                 key={to}
                 to={to}
-                className={`relative flex flex-col items-center justify-center gap-0.5 py-2 px-3 rounded-xl transition-all duration-200 min-w-0 flex-1 ${
+                className={`relative flex flex-col items-center justify-center gap-0.5 py-2 px-3 rounded-xl transition-[color,background-color,border-color] duration-150 min-w-0 flex-1 ${
                   active
                     ? 'bg-red-500/15 text-red-400 font-semibold border border-red-500/25 shadow-inner glow-red'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03] active:scale-95'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-white/[0.03]'
                 }`}
               >
                 <Icon className={`size-5 transition-transform duration-200 ${active ? 'scale-110 text-red-400' : ''}`} />
                 <span className="text-[10px] tracking-tight truncate">{label}</span>
                 {active && (
-                  <span className="absolute -bottom-1 w-1 h-1 bg-red-400 rounded-full animate-pulse" />
+                  <span className="absolute -bottom-1 w-1 h-1 bg-red-400 rounded-full motion-safe:animate-pulse" />
                 )}
               </Link>
             );

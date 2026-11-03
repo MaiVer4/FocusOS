@@ -36,7 +36,7 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto overscroll-contain">
         <div className="flex items-center gap-2 mb-1">
           <Sparkles className="size-5 text-purple-400" />
           <h3 className="text-xl font-bold">Importar con IA</h3>
@@ -59,7 +59,7 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cancelar
               </button>
@@ -67,10 +67,10 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
                 type="button"
                 onClick={handleClassify}
                 disabled={loading || !text.trim()}
-                className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150 flex items-center justify-center gap-2"
               >
                 {loading ? (
-                  <><Loader2 className="size-4 animate-spin" /> Clasificando...</>
+                  <><Loader2 className="size-4 motion-safe:animate-spin" /> Clasificando...</>
                 ) : (
                   <><Sparkles className="size-4" /> Clasificar</>
                 )}
@@ -86,7 +86,7 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
               {selected.filter(Boolean).length} de {items.length} seleccionadas
             </p>
 
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-64 overflow-y-auto overscroll-contain pr-1">
               {items.map((item, idx) => (
                 <label
                   key={idx}
@@ -157,7 +157,7 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
               <button
                 type="button"
                 onClick={() => setItems(null)}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 ← Editar
               </button>
@@ -165,7 +165,7 @@ export function SmartImportModal({ onImport, onClose }: SmartImportModalProps) {
                 type="button"
                 onClick={handleCreate}
                 disabled={selected.every(s => !s)}
-                className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Crear {selected.filter(Boolean).length} tarea{selected.filter(Boolean).length !== 1 ? 's' : ''}
               </button>

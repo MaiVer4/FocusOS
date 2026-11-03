@@ -486,7 +486,7 @@ export function Planner() {
                 : 'bg-zinc-800 border border-zinc-700 text-zinc-400'
         }`}>
           {syncResult.status === 'syncing' && (
-            <><Loader2 className="size-3 animate-spin" /> Sincronizando con Google...</>
+            <><Loader2 className="size-3 motion-safe:animate-spin" /> Sincronizando con Google...</>
           )}
           {syncResult.status === 'success' && (
             <>
@@ -570,11 +570,11 @@ export function Planner() {
               <button
                 onClick={handlePlanDayClick}
                 disabled={planningLoading}
-                className="px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold text-white transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+                className="px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold text-white transition-[background-color,opacity,transform] duration-150 shadow-sm flex items-center gap-1.5 enabled:active:scale-[0.96]"
                 title="Generar rutina diaria inteligente (IA con respaldo clínico automático)"
               >
                 {planningLoading ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                  <Loader2 className="size-3.5 motion-safe:animate-spin" />
                 ) : (
                   <Sparkles className="size-3.5" />
                 )}
@@ -962,7 +962,7 @@ export function Planner() {
                             <span className="text-zinc-500">{done}/{total} ({pct}%)</span>
                           </div>
                           <div className="w-full h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-                            <div className="h-full bg-emerald-500 rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
+                            <div className="h-full bg-emerald-500 rounded-full transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
                           </div>
                           <div className="space-y-1">
                             {task.subtasks.map(sub => (

@@ -256,21 +256,21 @@ export function Focus() {
           <div className="space-y-2.5">
             <button
               onClick={() => setManualView('workout')}
-              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-all active:scale-95"
+              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-500 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 transition-[background-color,transform] duration-150 enabled:active:scale-[0.96]"
             >
               <Dumbbell className="size-4" />
               Abrir Calistenia de Hoy ({splitDef.shortTitle})
             </button>
             <button
               onClick={() => setManualView('sleep')}
-              className="w-full py-3 px-4 bg-indigo-600/30 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-200 rounded-2xl font-semibold text-xs flex items-center justify-center gap-2 transition-all active:scale-95"
+              className="w-full py-3 px-4 bg-indigo-600/30 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-200 rounded-2xl font-semibold text-xs flex items-center justify-center gap-2 transition-[background-color,border-color,transform] duration-150 enabled:active:scale-[0.96]"
             >
               <Moon className="size-4" />
               Checklist de Sueño y Postura (10:00 p.m.)
             </button>
             <button
               onClick={() => navigate('/')}
-              className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-2xl font-semibold text-xs text-zinc-300 transition-colors"
+              className="w-full py-3 bg-zinc-800 hover:bg-zinc-700 rounded-2xl font-semibold text-xs text-zinc-300 transition-[background-color,transform] duration-150 enabled:active:scale-[0.96]"
             >
               Volver al Inicio
             </button>
@@ -340,9 +340,9 @@ export function Focus() {
           <span
             className={`size-2.5 rounded-full ${
               isWorkoutView
-                ? 'bg-emerald-400 animate-ping'
+                ? 'bg-emerald-400 motion-safe:animate-ping'
                 : currentBlock?.type === 'deep'
-                  ? 'bg-red-500 animate-ping'
+                  ? 'bg-red-500 motion-safe:animate-ping'
                   : 'bg-sky-400'
             }`}
           />
@@ -356,7 +356,7 @@ export function Focus() {
         </div>
         <button
           onClick={handleExit}
-          className="size-9 rounded-full glass-card hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-all active:scale-95"
+          className="size-9 rounded-full glass-card hover:bg-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-[background-color,color,transform] duration-150 enabled:active:scale-[0.96]"
           aria-label="Salir"
         >
           <X className="size-5" />
@@ -522,7 +522,7 @@ export function Focus() {
                           key={setNum}
                           type="button"
                           onClick={() => toggleExerciseSet(ex.id, setNum, ex.sets)}
-                          className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 flex items-center justify-center gap-1 ${
+                          className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-[background-color,border-color,color,transform] duration-150 enabled:active:scale-[0.96] flex items-center justify-center gap-1 ${
                             done
                               ? 'bg-emerald-600 text-white border-emerald-400 shadow-sm'
                               : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-white'
@@ -637,7 +637,7 @@ export function Focus() {
             <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
               <div
                 className={`text-5xl font-mono font-black tracking-tight tabular-nums drop-shadow-lg ${
-                  blockFinished ? 'text-emerald-400 animate-pulse' : 'text-white'
+                  blockFinished ? 'text-emerald-400 motion-safe:animate-pulse' : 'text-white'
                 }`}
               >
                 {formatCountdown(timeRemaining)}
@@ -670,7 +670,7 @@ export function Focus() {
             <div
               className={`w-full max-w-sm rounded-2xl p-4 border transition-all space-y-2 ${
                 postureDue
-                  ? 'bg-amber-950/60 border-amber-500/60 animate-pulse'
+                  ? 'bg-amber-950/60 border-amber-500/60 motion-safe:animate-pulse'
                   : 'glass-card border-teal-500/30'
               }`}
             >
@@ -700,7 +700,7 @@ export function Focus() {
                     setPostureDue(false);
                     setPostureSecsLeft(postureIntervalSecs);
                   }}
-                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition-all active:scale-95"
+                  className="px-3 py-1.5 bg-teal-600 hover:bg-teal-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition-[background-color,transform] duration-150 enabled:active:scale-[0.96]"
                 >
                   <RefreshCw className="size-3" /> Hice retracción escapular (60s)
                 </button>
@@ -715,7 +715,7 @@ export function Focus() {
         {currentBlock?.type === 'rest' && !isSleepBlock ? (
           <button
             onClick={() => navigate('/')}
-            className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 active:scale-98 rounded-2xl font-bold text-base transition-all shadow-lg"
+            className="w-full py-4 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-2xl font-bold text-base transition-[background-color,transform] duration-150 shadow-lg"
           >
             Volver al Inicio
           </button>
@@ -723,14 +723,14 @@ export function Focus() {
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={handleComplete}
-              className="py-4 bg-emerald-600 hover:bg-emerald-500 active:scale-95 text-white rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-all shadow-lg glow-emerald"
+              className="py-4 bg-emerald-600 hover:bg-emerald-500 enabled:active:scale-[0.96] text-white rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-[background-color,transform] duration-150 shadow-lg glow-emerald"
             >
               <CheckCircle2 className="size-5" />
               {isWorkoutView ? 'Finalizar Entreno' : 'Completado'}
             </button>
             <button
               onClick={() => (currentBlock ? handleFail() : navigate('/'))}
-              className="py-4 bg-zinc-900 hover:bg-zinc-800 active:scale-95 border border-white/10 text-zinc-300 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-all"
+              className="py-4 bg-zinc-900 hover:bg-zinc-800 enabled:active:scale-[0.96] border border-white/10 text-zinc-300 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-[background-color,border-color,transform] duration-150"
             >
               <XCircle className="size-5 text-red-400" />
               {currentBlock ? 'No cumplí' : 'Cerrar'}
@@ -741,7 +741,7 @@ export function Focus() {
 
       {/* Exit Warning Modal */}
       {showExitWarning && (
-        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-6 z-50 animate-in fade-in">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md flex items-center justify-center p-6 z-50 motion-safe:animate-in motion-safe:fade-in">
           <div className="glass-card rounded-3xl p-6 max-w-sm w-full space-y-4 border border-red-500/30 glow-red">
             <div className="flex items-start gap-3.5">
               <div className="p-2.5 bg-red-500/20 rounded-2xl flex-shrink-0">
@@ -757,13 +757,13 @@ export function Focus() {
             <div className="flex gap-3 pt-2">
               <button
                 onClick={() => setShowExitWarning(false)}
-                className="flex-1 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-sm transition-all active:scale-95 shadow-md glow-red"
+                className="flex-1 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-bold text-sm transition-[background-color,transform] duration-150 enabled:active:scale-[0.96] shadow-md glow-red"
               >
                 Continuar
               </button>
               <button
                 onClick={confirmExit}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-all active:scale-95"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-[background-color,transform] duration-150 enabled:active:scale-[0.96]"
               >
                 Salir
               </button>

@@ -330,4 +330,21 @@ class NotificationService {
   }
 }
 
+/** Vibración háptica instantánea en dispositivos Android */
+export function triggerHaptic(type: 'success' | 'warning' | 'light' = 'light') {
+  if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      if (type === 'success') {
+        navigator.vibrate([60, 40, 80]);
+      } else if (type === 'warning') {
+        navigator.vibrate([100, 50, 100]);
+      } else {
+        navigator.vibrate(35);
+      }
+    } catch {
+      // Ignorar en dispositivos que no soporten vibración
+    }
+  }
+}
+
 export const notificationService = new NotificationService();

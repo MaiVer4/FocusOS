@@ -52,7 +52,7 @@ export function BlockModal({ block, tasks, onSave, onClose }: BlockModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-bold mb-1">
           {isEditing ? 'Editar Bloque' : 'Nuevo Bloque'}
         </h3>
@@ -158,13 +158,13 @@ export function BlockModal({ block, tasks, onSave, onClose }: BlockModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+              className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="flex-1 py-3 bg-red-600 hover:bg-red-700 rounded-xl font-semibold text-sm transition-colors"
+              className="flex-1 py-3 bg-red-600 hover:bg-red-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
             >
               {isEditing ? 'Guardar Cambios' : 'Agregar Bloque'}
             </button>

@@ -23,6 +23,7 @@ import {
   Utensils,
   ShieldCheck,
   ShieldAlert,
+  HeartPulse,
 } from 'lucide-react';
 
 export function Metrics() {
@@ -84,6 +85,20 @@ export function Metrics() {
       : 100;
   const completionRate =
     totalBlocks > 0 ? Math.round((completedBlocks / totalBlocks) * 100) : 0;
+  const avgBio =
+    metrics.length > 0
+      ? Math.round(
+          metrics.reduce((s, m) => s + (m.biologicalScore ?? m.disciplineScore), 0) /
+            metrics.length
+        )
+      : 100;
+  const avgFocus =
+    metrics.length > 0
+      ? Math.round(
+          metrics.reduce((s, m) => s + (m.focusScore ?? m.disciplineScore), 0) /
+            metrics.length
+        )
+      : 100;
 
   // Trend
   const recentAvg =
@@ -231,6 +246,30 @@ export function Metrics() {
           Disciplina y Productividad
         </h2>
         <div className="grid grid-cols-2 gap-3">
+          {/* Score Biológico Promedio */}
+          <div className="bg-gradient-to-br from-emerald-950/30 to-zinc-900 border border-emerald-500/30 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-emerald-400 mb-1">
+              <HeartPulse className="size-4" />
+              <span className="text-xs uppercase tracking-wider font-bold">Biológico</span>
+            </div>
+            <div className="text-3xl font-black text-emerald-400 tabular-nums">{avgBio}%</div>
+            <div className="text-[11px] text-zinc-400 mt-1">
+              Nutrición, agua, espalda y sueño
+            </div>
+          </div>
+
+          {/* Score Enfoque Promedio */}
+          <div className="bg-gradient-to-br from-blue-950/30 to-zinc-900 border border-blue-500/30 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-blue-400 mb-1">
+              <Zap className="size-4" />
+              <span className="text-xs uppercase tracking-wider font-bold">Enfoque</span>
+            </div>
+            <div className="text-3xl font-black text-blue-400 tabular-nums">{avgFocus}%</div>
+            <div className="text-[11px] text-zinc-400 mt-1">
+              SENA y desarrollo de código
+            </div>
+          </div>
+
           {/* Discipline */}
           <div className="bg-gradient-to-br from-red-900/20 to-orange-900/20 border border-red-800/30 rounded-2xl p-4">
             <div className="flex items-center gap-2 text-red-400 mb-1">

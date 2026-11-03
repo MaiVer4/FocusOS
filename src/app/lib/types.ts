@@ -7,6 +7,27 @@ export type PeakEnergyTime = 'morning' | 'afternoon' | 'night';
 export type WorkoutSlot = 'morning' | 'evening';
 export type WorkoutSplitType = 'push' | 'pull' | 'legs' | 'rest';
 export type MealId = 'breakfast' | 'post_workout' | 'sena_lunch' | 'dinner';
+export type WeekendPlanMode = 'projects' | 'free';
+
+export type CircadianPhaseId =
+  | 'morning'
+  | 'workout'
+  | 'pre_sena'
+  | 'sena'
+  | 'evening_code'
+  | 'warm_night'
+  | 'wind_down';
+
+export interface CircadianPhase {
+  id: CircadianPhaseId;
+  label: string;
+  sublabel: string;
+  color: string;
+  borderColor: string;
+  badgeBg: string;
+  bgGradient: string;
+  dotColor: string;
+}
 
 export interface Subtask {
   id: string;
@@ -73,6 +94,8 @@ export interface DailyHealthLog {
   weightKg?: number;    // base: 47 kg, meta: 53-55 kg
   sleepChecklist?: SleepChecklistState;
   postureBreaksCount?: number;
+  outOfRoutine?: boolean; // Modo fuera de casa / planes libres
+  weekendMode?: WeekendPlanMode; // Modo fin de semana: 'projects' o 'free'
 }
 
 export interface ExerciseSetProgress {
@@ -98,6 +121,8 @@ export interface DailyMetrics {
   interruptions: number;
   deepWorkHours: number;
   disciplineScore: number;
+  biologicalScore?: number;
+  focusScore?: number;
   energyLevel?: number;
   weightKg?: number;
   waterMl?: number;

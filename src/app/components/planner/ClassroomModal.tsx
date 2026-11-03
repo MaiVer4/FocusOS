@@ -66,7 +66,7 @@ export function ClassroomModal({
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[92vh] overflow-y-auto overscroll-contain">
         <div className="flex items-center gap-2 mb-1">
           <GraduationCap className="size-5 text-green-400" />
           <h3 className="text-xl font-bold">Google Classroom</h3>
@@ -77,7 +77,7 @@ export function ClassroomModal({
           connected ? 'bg-green-900/20 border border-green-800/30' : 'bg-zinc-800 border border-zinc-700'
         }`}>
           <div className="flex items-center gap-2">
-            <span className={`size-2.5 rounded-full ${connected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`} />
+            <span className={`size-2.5 rounded-full ${connected ? 'bg-green-400 motion-safe:animate-pulse' : 'bg-red-400'}`} />
             <span className={`text-xs font-medium ${connected ? 'text-green-400' : 'text-zinc-400'}`}>
               {connected ? 'Conectado a Google' : 'Desconectado'}
             </span>
@@ -105,14 +105,14 @@ export function ClassroomModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cancelar
               </button>
               <button
                 type="button"
                 onClick={() => handleFetch(false)}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-2"
+                className="flex-1 py-3 bg-green-600 hover:bg-green-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150 flex items-center justify-center gap-2"
               >
                 <GraduationCap className="size-4" /> {connected ? 'Obtener tareas' : 'Conectar'}
               </button>
@@ -123,7 +123,7 @@ export function ClassroomModal({
         {/* Cargando */}
         {loading && (
           <div className="flex flex-col items-center gap-3 py-8">
-            <Loader2 className="size-8 animate-spin text-green-400" />
+            <Loader2 className="size-8 motion-safe:animate-spin text-green-400" />
             <p className="text-xs text-zinc-400">Consultando Google Classroom...</p>
           </div>
         )}
@@ -138,14 +138,14 @@ export function ClassroomModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cerrar
               </button>
               <button
                 type="button"
                 onClick={() => handleFetch(true)}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-700 rounded-xl font-semibold text-sm transition-colors flex items-center justify-center gap-1.5"
+                className="flex-1 py-3 bg-green-600 hover:bg-green-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150 flex items-center justify-center gap-1.5"
               >
                 <GraduationCap className="size-4" /> Reintentar / Reconectar
               </button>
@@ -160,7 +160,7 @@ export function ClassroomModal({
               {tasks.filter(t => t.selected).length} de {tasks.length} seleccionadas
             </p>
 
-            <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-72 overflow-y-auto overscroll-contain pr-1">
               {tasks.map((ct, idx) => (
                 <label
                   key={ct.courseworkId}
@@ -212,7 +212,7 @@ export function ClassroomModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Cancelar
               </button>
@@ -220,7 +220,7 @@ export function ClassroomModal({
                 type="button"
                 onClick={handleCreateTasks}
                 disabled={tasks.every(t => !t.selected)}
-                className="flex-1 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 rounded-xl font-semibold text-sm transition-colors"
+                className="flex-1 py-3 bg-green-600 hover:bg-green-700 disabled:opacity-50 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
               >
                 Importar {tasks.filter(t => t.selected).length} tarea{tasks.filter(t => t.selected).length !== 1 ? 's' : ''}
               </button>

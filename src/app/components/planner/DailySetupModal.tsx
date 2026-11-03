@@ -6,7 +6,7 @@ interface DailySetupModalProps {
 export function DailySetupModal({ onGenerate, onClose }: DailySetupModalProps) {
   return (
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full space-y-5">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full space-y-5 max-h-[92vh] overflow-y-auto overscroll-contain">
         <div>
           <h3 className="text-xl font-bold text-white">Generar Rutina Diaria Personalizada</h3>
           <p className="text-zinc-400 text-xs mt-2 leading-relaxed">
@@ -26,14 +26,14 @@ export function DailySetupModal({ onGenerate, onClose }: DailySetupModalProps) {
         <button
           type="button"
           onClick={onGenerate}
-          className="w-full py-3.5 bg-red-600 hover:bg-red-700 rounded-xl font-bold text-base transition-all active:scale-95"
+          className="w-full py-3.5 bg-red-600 hover:bg-red-700 rounded-xl font-bold text-base transition-[colors,transform] duration-150 enabled:active:scale-[0.96]"
         >
           Generar Automáticamente
         </button>
         <button
           type="button"
           onClick={onClose}
-          className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors text-zinc-300"
+          className="w-full py-2.5 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-[colors,transform] duration-150 enabled:active:scale-[0.96] text-zinc-300"
         >
           Cancelar
         </button>

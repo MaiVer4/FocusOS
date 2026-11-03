@@ -12,6 +12,7 @@ import {
   MealId,
   MealCustomOverride,
   SleepChecklistState,
+  WeekendPlanMode,
 } from './types';
 import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, cleanBlockLabel, generateUUID } from './helpers';
 import { cloudSync } from './cloud-sync';
@@ -388,45 +389,73 @@ function generateWeekdayTemplate(
   return blocks;
 }
 
-/** Sábado (Día 6: Piernas y Core) — construido dinámicamente desde Settings */
-function generateSaturdayTemplate(s: UserSettings): TemplateBlock[] {
+/** Sábado (Día 6: Piernas y Core) — con soporte para Día Libre o Proyectos */
+function generateSaturdayTemplate(
+  s: UserSettings,
+  weekendMode?: WeekendPlanMode,
+  isOutOfRoutine?: boolean
+): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
   const wake = _toMin(s.wakeTime || '07:00');
   const sleep = _toMin(s.sleepTime || '22:30');
   const deepDur = s.deepBlockDuration || 50;
   const exDur = s.exerciseDuration || 50;
   const splitInfo = WORKOUT_SPLITS.legs;
+  const isFree = isOutOfRoutine || weekendMode === 'free';
 
   let c = wake;
 
   c = _push(blocks, c, 30, 'rest', 'Despertar (1 alarma) · Luz solar + Vaso de agua', 'high');
   c = _push(blocks, c, 30, 'rest', 'Desayuno obligatorio (Mín. 3 huevos + arepa/pan)', 'high');
-  c = _push(blocks, c, 60, 'light', 'Repaso / Lectura matutina', 'medium', true);
 
-  // 09:00 - 09:50: Día 6 Piernas y Core
-  if (s.exerciseMandatory) {
-    c = _push(blocks, c, exDur, 'exercise', `Calistenia: ${splitInfo.shortTitle}`, 'high');
-    c = _push(blocks, c, 25, 'rest', 'Ducha y recuperación', 'low');
-  }
+  if (isFree) {
+    // Modo Libre / Fuera de Rutina
+    c = _push(blocks, c, 90, 'rest', 'Mañana libre · Planes flexibles / Salida', 'low');
+    if (s.exerciseMandatory) {
+      c = _push(blocks, c, exDur, 'exercise', `Calistenia (Flexible): ${splitInfo.shortTitle}`, 'medium');
+      c = _push(blocks, c, 25, 'rest', 'Ducha y recuperación', 'low');
+    }
+    c = _push(blocks, c, 25, 'rest', 'Recarga Post-Entreno (Licuado o sándwich)', 'high');
 
-  c = _push(blocks, c, 25, 'rest', 'Recarga Post-Entreno (Licuado o sándwich)', 'high');
+    const lunchTarget = Math.max(c, 13 * 60 + 30);
+    if (lunchTarget > c) {
+      c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre / Salida', 'low');
+    }
+    c = _push(blocks, c, 45, 'rest', 'Almuerzo completo de casa (Granos + Arroz + Proteína)', 'high');
 
-  // Bloques profundos de fin de semana
-  c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 1', 'high', true);
-  c = _push(blocks, c, 10, 'rest', 'Pausa postural (Retracción escapular)', 'low');
-  c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 2', 'high', true);
+    const dinnerTarget = Math.max(c, 20 * 60);
+    if (dinnerTarget > c) {
+      c = _push(blocks, c, dinnerTarget - c, 'rest', 'Tarde libre fuera de rutina / Descanso', 'low');
+    }
+  } else {
+    // Modo Proyectos en Casa
+    c = _push(blocks, c, 60, 'light', 'Repaso / Lectura matutina', 'medium', true);
 
-  // Almuerzo 2:00 p.m.
-  const lunchTarget = Math.max(c, 14 * 60);
-  if (lunchTarget > c) {
-    c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre', 'low');
-  }
-  c = _push(blocks, c, 45, 'rest', 'Almuerzo completo de casa (Granos + Arroz + Proteína)', 'high');
+    // 09:00 - 09:50: Día 6 Piernas y Core
+    if (s.exerciseMandatory) {
+      c = _push(blocks, c, exDur, 'exercise', `Calistenia: ${splitInfo.shortTitle}`, 'high');
+      c = _push(blocks, c, 25, 'rest', 'Ducha y recuperación', 'low');
+    }
 
-  // Tarde libre hasta la cena de las 20:00
-  const dinnerTarget = Math.max(c, 20 * 60);
-  if (dinnerTarget > c) {
-    c = _push(blocks, c, dinnerTarget - c, 'rest', 'Tiempo libre y descanso activo', 'low');
+    c = _push(blocks, c, 25, 'rest', 'Recarga Post-Entreno (Licuado o sándwich)', 'high');
+
+    // Bloques profundos de fin de semana
+    c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 1', 'high', true);
+    c = _push(blocks, c, 10, 'rest', 'Pausa postural (Retracción escapular)', 'low');
+    c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 2', 'high', true);
+
+    // Almuerzo 2:00 p.m.
+    const lunchTarget = Math.max(c, 14 * 60);
+    if (lunchTarget > c) {
+      c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre', 'low');
+    }
+    c = _push(blocks, c, 45, 'rest', 'Almuerzo completo de casa (Granos + Arroz + Proteína)', 'high');
+
+    // Tarde libre hasta la cena de las 20:00
+    const dinnerTarget = Math.max(c, 20 * 60);
+    if (dinnerTarget > c) {
+      c = _push(blocks, c, dinnerTarget - c, 'rest', 'Tiempo libre y descanso activo', 'low');
+    }
   }
 
   c = _push(blocks, c, 30, 'rest', 'Cena completa + Corte de líquidos', 'high');
@@ -440,11 +469,16 @@ function generateSaturdayTemplate(s: UserSettings): TemplateBlock[] {
   return blocks;
 }
 
-/** Domingo (Recuperación y Movilidad Postural) — construido dinámicamente desde Settings */
-function generateSundayTemplate(s: UserSettings): TemplateBlock[] {
+/** Domingo (Recuperación y Movilidad Postural) — con soporte para Día Libre o Enfoque */
+function generateSundayTemplate(
+  s: UserSettings,
+  weekendMode?: WeekendPlanMode,
+  isOutOfRoutine?: boolean
+): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
   const wake = _toMin(s.wakeTime || '07:00');
   const sleep = _toMin(s.sleepTime || '22:30');
+  const isFree = isOutOfRoutine || weekendMode === 'free';
 
   let c = wake;
 
@@ -454,23 +488,24 @@ function generateSundayTemplate(s: UserSettings): TemplateBlock[] {
   // Mañana libre + recarga
   const midMorning = Math.max(c + 30, 10 * 60 + 30);
   if (midMorning > c) {
-    c = _push(blocks, c, midMorning - c, 'rest', 'Mañana libre', 'low');
+    c = _push(blocks, c, midMorning - c, 'rest', 'Mañana libre / Descanso familiar', 'low');
   }
   c = _push(blocks, c, 25, 'rest', 'Merienda de media mañana (Avena/Fruta/Leche)', 'medium');
 
   const lunchTarget = Math.max(c, 13 * 60 + 30);
   if (lunchTarget > c) {
-    c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre familiar', 'low');
+    c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre familiar / Salida', 'low');
   }
 
   c = _push(blocks, c, 50, 'rest', 'Almuerzo familiar completo', 'high');
 
-  const planStart = Math.max(c, 16 * 60 + 30);
-  if (planStart > c) {
-    c = _push(blocks, c, planStart - c, 'rest', 'Tiempo libre', 'low');
+  if (!isFree) {
+    const planStart = Math.max(c, 16 * 60 + 30);
+    if (planStart > c) {
+      c = _push(blocks, c, planStart - c, 'rest', 'Tiempo libre', 'low');
+    }
+    c = _push(blocks, c, 50, 'light', 'Planear semana – entregas SENA y prioridades', 'high', true);
   }
-
-  c = _push(blocks, c, 50, 'light', 'Planear semana – entregas SENA y prioridades', 'high', true);
 
   if (s.exerciseMandatory) {
     c = _push(blocks, c, 25, 'exercise', 'Movilidad torácica y descompresión de escoliosis', 'medium');
@@ -497,10 +532,12 @@ function getTemplateForDay(
   dayOfWeek: number,
   settings: UserSettings,
   workoutLogs: DailyWorkoutLog[],
-  dateStr: string
+  dateStr: string,
+  weekendMode?: WeekendPlanMode,
+  isOutOfRoutine?: boolean
 ): TemplateBlock[] {
-  if (dayOfWeek === 6) return generateSaturdayTemplate(settings);
-  if (dayOfWeek === 0) return generateSundayTemplate(settings);
+  if (dayOfWeek === 6) return generateSaturdayTemplate(settings, weekendMode, isOutOfRoutine);
+  if (dayOfWeek === 0) return generateSundayTemplate(settings, weekendMode, isOutOfRoutine);
   return generateWeekdayTemplate(settings, dayOfWeek, workoutLogs, dateStr);
 }
 
@@ -588,6 +625,8 @@ function createEmptyHealthLog(date: string): DailyHealthLog {
   return {
     date,
     waterMl: 0,
+    outOfRoutine: false,
+    weekendMode: undefined,
     mealsCompleted: {
       breakfast: false,
       post_workout: false,
@@ -944,6 +983,88 @@ class Store {
     });
   }
 
+  // ─── Out of Routine & Weekend Mode ──────────────────────────────────────────
+
+  isOutOfRoutine(date: string): boolean {
+    return !!this.getHealthLog(date).outOfRoutine;
+  }
+
+  toggleOutOfRoutine(date: string, forceState?: boolean): boolean {
+    const current = this.getHealthLog(date);
+    const nextState = forceState !== undefined ? forceState : !current.outOfRoutine;
+    this.updateHealthLog(date, { outOfRoutine: nextState });
+
+    if (nextState) {
+      const dayBlocks = this.getBlocks(date);
+      dayBlocks.forEach((b) => {
+        if (b.status === 'pending' && (b.type === 'deep' || b.type === 'light')) {
+          b.label = `[Fuera de rutina] ${cleanBlockLabel(b.label)}`;
+        }
+      });
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    }
+    this.recalcDailyMetrics(date);
+    return nextState;
+  }
+
+  getWeekendPlanMode(date: string): WeekendPlanMode | undefined {
+    return this.getHealthLog(date).weekendMode;
+  }
+
+  setWeekendPlanMode(date: string, mode: WeekendPlanMode): Block[] {
+    this.updateHealthLog(date, { weekendMode: mode, outOfRoutine: mode === 'free' });
+    const dayBlocks = this.getBlocks(date);
+    const hasCompleted = dayBlocks.some((b) => b.status === 'completed');
+
+    if (!hasCompleted) {
+      this.blocks = this.blocks.filter((b) => b.date !== date);
+      const dayOfWeek = new Date(date + 'T12:00:00').getDay();
+      const template = getTemplateForDay(
+        dayOfWeek,
+        this.settings,
+        this.workoutLogs,
+        date,
+        mode,
+        mode === 'free'
+      );
+      const newBlocks: Block[] = template.map((t) => ({
+        id: generateUUID(),
+        date,
+        type: t.type,
+        label: t.label,
+        priority: t.priority,
+        duration: durationBetween(t.startTime, t.endTime),
+        startTime: t.startTime,
+        endTime: t.endTime,
+        status: 'pending',
+        interruptions: 0,
+      }));
+      this.blocks = [...this.blocks, ...newBlocks];
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+      this.recalcDailyMetrics(date);
+      return newBlocks;
+    }
+    this.recalcDailyMetrics(date);
+    return dayBlocks;
+  }
+
+  postponeBlock(blockId: string, minutes = 15): boolean {
+    const block = this.blocks.find((b) => b.id === blockId);
+    if (!block) return false;
+
+    const [eh, em] = block.endTime.split(':').map(Number);
+    const newEndMin = eh * 60 + em + minutes;
+    if (newEndMin >= 24 * 60) return false;
+
+    block.endTime = _toTime(newEndMin);
+    block.duration = Math.max(10, durationBetween(block.startTime, block.endTime));
+
+    this.reorganizeFromNow(block.date);
+    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+    this.scheduleNotify();
+    return true;
+  }
+
   // ─── Tasks ─────────────────────────────────────────────────────────────────
 
   getTasks(): Task[] {
@@ -1264,7 +1385,15 @@ class Store {
     if (existing.length > 0) return [];
 
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
-    const template = getTemplateForDay(dayOfWeek, this.settings, this.workoutLogs, date);
+    const hLog = this.getHealthLog(date);
+    const template = getTemplateForDay(
+      dayOfWeek,
+      this.settings,
+      this.workoutLogs,
+      date,
+      hLog.weekendMode,
+      hLog.outOfRoutine
+    );
 
     const tasks = this.getTasksForDayWithCarryOver(date);
     const newBlocks: Block[] = [];
@@ -1676,6 +1805,8 @@ class Store {
     const deepWorkHours = blocks
       .filter((b) => b.type === 'deep' && b.status === 'completed')
       .reduce((sum, b) => sum + b.duration / 60, 0);
+    const biologicalScore = this.calculateBiologicalScore(date);
+    const focusScore = this.calculateFocusScore(date);
     const disciplineScore = this.calculateDailyScore(date);
 
     const hLog = this.healthLogs.find((h) => h.date === date);
@@ -1692,6 +1823,8 @@ class Store {
       interruptions,
       deepWorkHours,
       disciplineScore,
+      biologicalScore,
+      focusScore,
       energyLevel: hLog?.energyLevel,
       weightKg: hLog?.weightKg,
       waterMl: hLog?.waterMl,
@@ -1779,24 +1912,71 @@ class Store {
     return sorted.find((b) => b.startTime > currentTime && b.status === 'pending') ?? null;
   }
 
-  calculateDailyScore(date: string): number {
-    const blocks = this.getBlocks(date);
-    const workBlocks = blocks.filter((b) => b.type !== 'rest');
-    if (workBlocks.length === 0) return 100;
+  calculateBiologicalScore(date: string): number {
+    const hLog = this.getHealthLog(date);
+    const wLog = this.getWorkoutLog(date);
 
-    let score = 100;
-    const today = todayStr();
-    workBlocks.forEach((block) => {
-      if (block.status === 'failed') {
-        score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
-      } else if (block.status === 'pending' && date < today) {
-        score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
-      }
-      if (block.interruptions > 0) {
-        score -= block.interruptions * 5;
-      }
-    });
-    return Math.max(0, score);
+    // 1. Nutrición (40%): 4 comidas caseras completas (~10% c/u)
+    const mealsDone = Object.values(hLog.mealsCompleted ?? {}).filter(Boolean).length;
+    const nutritionScore = Math.min(40, mealsDone * 10);
+
+    // 2. Calistenia / Escoliosis 2:1 (30%):
+    const guard = this.getBiomechanicalGuard(date);
+    const isRestDay = guard.recommendedSplit === 'rest';
+    let workoutScore = 0;
+    if (isRestDay) {
+      workoutScore = 30; // Día de descanso biomecánico respetado
+    } else if (wLog.completed) {
+      workoutScore = 30;
+    } else {
+      const setsDone = Object.values(wLog.exercises ?? {}).filter((e) => e.setsDone > 0).length;
+      workoutScore = setsDone > 0 ? 15 : 0;
+    }
+
+    // 3. Hidratación (20%): Meta 2500 ml
+    const waterScore = Math.min(20, Math.round(((hLog.waterMl || 0) / 2500) * 20));
+
+    // 4. Sueño y Desconexión (10%):
+    const sleepChecks = hLog.sleepChecklist ?? {
+      waterCut830: false,
+      blueLightOff: false,
+      nasalWash: false,
+      singleAlarmFar: false,
+      sideOrBackPosture: false,
+    };
+    const sleepCount = Object.values(sleepChecks).filter(Boolean).length;
+    const sleepScore = Math.min(10, Math.round((sleepCount / 5) * 10));
+
+    return Math.min(100, nutritionScore + workoutScore + waterScore + sleepScore);
+  }
+
+  calculateFocusScore(date: string): number {
+    const hLog = this.getHealthLog(date);
+    if (hLog.outOfRoutine) return 100;
+
+    const blocks = this.getBlocks(date);
+    const studyBlocks = blocks.filter((b) => b.type === 'deep' || b.type === 'light');
+    if (studyBlocks.length === 0) return 100;
+
+    const completed = studyBlocks.filter((b) => b.status === 'completed').length;
+    const failed = studyBlocks.filter((b) => b.status === 'failed').length;
+    const interruptions = studyBlocks.reduce((sum, b) => sum + (b.interruptions ?? 0), 0);
+
+    let base = Math.round((completed / studyBlocks.length) * 100);
+    base -= failed * 10;
+    base -= interruptions * 3;
+    return Math.max(0, Math.min(100, base));
+  }
+
+  calculateDailyScore(date: string): number {
+    const hLog = this.getHealthLog(date);
+    const bioScore = this.calculateBiologicalScore(date);
+    if (hLog.outOfRoutine) {
+      return bioScore;
+    }
+    const focusScore = this.calculateFocusScore(date);
+    // Modo Híbrido acordado: 70% Biológico (no negociables) + 30% Enfoque/Estudio
+    return Math.round(bioScore * 0.7 + focusScore * 0.3);
   }
 
   cleanExpiredBlocks(): number {

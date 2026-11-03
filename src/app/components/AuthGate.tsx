@@ -132,7 +132,7 @@ export function AuthGate() {
           <button
             type="submit"
             disabled={busy}
-            className="w-full py-2.5 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-60 text-sm font-medium"
+            className="w-full py-2.5 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-60 text-sm font-medium transition-[background-color,transform] duration-150 enabled:active:scale-[0.96]"
           >
             {busy ? 'Procesando…' : mode === 'register' ? 'Crear cuenta' : 'Entrar'}
           </button>
@@ -147,7 +147,7 @@ export function AuthGate() {
           type="button"
           onClick={loginGoogle}
           disabled={busy}
-          className="w-full py-2.5 rounded-lg border border-zinc-700 hover:bg-zinc-800 disabled:opacity-60 text-sm font-medium flex items-center justify-center gap-2"
+          className="w-full py-2.5 rounded-lg border border-zinc-700 hover:bg-zinc-800 disabled:opacity-60 text-sm font-medium flex items-center justify-center gap-2 transition-[background-color,border-color,transform] duration-150 enabled:active:scale-[0.96]"
         >
           <Lock className="size-4" />
           Iniciar sesión con Google

@@ -1,4 +1,4 @@
-import { BlockType, BlockStatus, Difficulty, TaskStatus } from './types';
+import { BlockType, BlockStatus, Difficulty, TaskStatus, CircadianPhase } from './types';
 
 // ─── Block helpers ─────────────────────────────────────────────────────────────
 
@@ -249,5 +249,100 @@ export function generateUUID(): string {
     const v = c === 'x' ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+/** Retorna la fase cronobiológica activa según la hora del día */
+export function getCircadianPhase(date: Date = new Date()): CircadianPhase {
+  const m = date.getHours() * 60 + date.getMinutes();
+
+  // 07:00 (420) a 08:30 (510)
+  if (m >= 420 && m < 510) {
+    return {
+      id: 'morning',
+      label: 'Fase 1 · Despertar & Nutrición',
+      sublabel: 'Luz solar + Vaso de agua + Mín. 3 huevos',
+      color: 'text-amber-400',
+      borderColor: 'border-amber-500/40',
+      badgeBg: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+      bgGradient: 'from-amber-950/40 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-amber-400',
+    };
+  }
+  // 08:30 (510) a 10:30 (630)
+  if (m >= 510 && m < 630) {
+    return {
+      id: 'workout',
+      label: 'Fase 2 · Calistenia & Hipertrofia 2:1',
+      sublabel: 'Morral con libros · Tempo estricto · Espalda alineada',
+      color: 'text-emerald-400',
+      borderColor: 'border-emerald-500/40',
+      badgeBg: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+      bgGradient: 'from-emerald-950/40 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-emerald-400',
+    };
+  }
+  // 10:30 (630) a 11:35 (695)
+  if (m >= 630 && m < 695) {
+    return {
+      id: 'pre_sena',
+      label: 'Fase 3 · Recarga Post-Entreno & Termo SENA',
+      sublabel: 'Licuado calórico o sándwich + llenar termo de agua',
+      color: 'text-cyan-400',
+      borderColor: 'border-cyan-500/40',
+      badgeBg: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
+      bgGradient: 'from-cyan-950/40 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-cyan-400',
+    };
+  }
+  // 11:35 (695) a 18:45 (1125)
+  if (m >= 695 && m < 1125) {
+    return {
+      id: 'sena',
+      label: 'Fase 4 · Formación SENA & Hidratación',
+      sublabel: 'Almuerzo 2:00 p.m. · Hidratación constante de termo',
+      color: 'text-blue-400',
+      borderColor: 'border-blue-500/40',
+      badgeBg: 'bg-blue-500/10 text-blue-300 border-blue-500/30',
+      bgGradient: 'from-blue-950/40 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-blue-400',
+    };
+  }
+  // 18:45 (1125) a 21:00 (1260)
+  if (m >= 1125 && m < 1260) {
+    return {
+      id: 'evening_code',
+      label: 'Fase 5 · Desarrollo, Código & Cena 8:00 p.m.',
+      sublabel: 'Postura erguida · Cena completa · Corte agua 8:30 p.m.',
+      color: 'text-indigo-400',
+      borderColor: 'border-indigo-500/40',
+      badgeBg: 'bg-indigo-500/10 text-indigo-300 border-indigo-500/30',
+      bgGradient: 'from-indigo-950/40 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-indigo-400',
+    };
+  }
+  // 21:00 (1260) a 22:00 (1320)
+  if (m >= 1260 && m < 1320) {
+    return {
+      id: 'warm_night',
+      label: 'Fase 6 · Luz Cálida & Desconexión',
+      sublabel: 'Modo nocturno cálido · Proteger melatonina y descanso',
+      color: 'text-orange-400',
+      borderColor: 'border-orange-500/50',
+      badgeBg: 'bg-orange-500/15 text-orange-300 border-orange-500/40',
+      bgGradient: 'from-orange-950/50 via-zinc-950 to-zinc-950',
+      dotColor: 'bg-orange-400',
+    };
+  }
+  // 22:00 en adelante o antes de 07:00
+  return {
+    id: 'wind_down',
+    label: 'Fase 7 · Protocolo de Sueño y Escoliosis',
+    sublabel: 'Pantallas apagadas · 1 alarma 7:00 a.m. · Almohada entre piernas',
+    color: 'text-purple-400',
+    borderColor: 'border-purple-500/40',
+    badgeBg: 'bg-purple-500/10 text-purple-300 border-purple-500/30',
+    bgGradient: 'from-purple-950/40 via-zinc-950 to-zinc-950',
+    dotColor: 'bg-purple-400',
+  };
 }
 

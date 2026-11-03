@@ -59,7 +59,7 @@ export function TaskModal({ task, onSave, onClose }: TaskModalProps) {
 
   return (
     <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center p-4 z-50">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto overscroll-contain">
         <h3 className="text-xl font-bold mb-1">
           {isEditing ? 'Editar Tarea' : 'Nueva Tarea'}
         </h3>
@@ -190,13 +190,13 @@ export function TaskModal({ task, onSave, onClose }: TaskModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 rounded-xl font-semibold text-sm transition-colors"
+              className="flex-1 py-3 bg-zinc-800 hover:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 rounded-xl font-semibold text-sm transition-colors"
+              className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 enabled:active:scale-[0.96] rounded-xl font-semibold text-sm transition-[colors,transform] duration-150"
             >
               {isEditing ? 'Guardar Cambios' : 'Crear Tarea'}
             </button>

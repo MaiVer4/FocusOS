@@ -457,7 +457,7 @@ export function Settings() {
             <button
               type="button"
               onClick={testNotification}
-              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95"
+              className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 enabled:active:scale-[0.96] rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-[background-color,transform] duration-150"
             >
               <Bell className="size-4" />
               Probar notificación
@@ -662,11 +662,11 @@ export function Settings() {
                         }
                         setValidatingKey(false);
                       }}
-                      className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors active:scale-95 text-white"
+                      className="w-full py-2.5 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 enabled:active:scale-[0.96] rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-[background-color,transform] duration-150 text-white"
                     >
                       {validatingKey ? (
                         <>
-                          <Loader2 className="size-4 animate-spin" /> Verificando clave...
+                          <Loader2 className="size-4 motion-safe:animate-spin" /> Verificando clave...
                         </>
                       ) : keyStatus === 'valid' ? (
                         <span className="text-green-300 font-semibold">✓ Conexión exitosa y verificada</span>
@@ -708,7 +708,7 @@ export function Settings() {
         {/* Save */}
         <button
           type="submit"
-          className={`w-full py-4 rounded-xl font-semibold text-base flex items-center justify-center gap-2 transition-all active:scale-95 ${
+          className={`w-full py-4 rounded-xl font-semibold text-base flex items-center justify-center gap-2 transition-[background-color,transform] duration-150 enabled:active:scale-[0.96] ${
             saved ? 'bg-green-600' : 'bg-red-600 hover:bg-red-700'
           }`}
         >
