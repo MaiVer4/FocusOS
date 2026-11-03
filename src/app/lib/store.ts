@@ -1,14 +1,43 @@
-import { Block, BlockType, BlockPriority, Difficulty, Task, TaskStatus, DailyMetrics, UserSettings } from './types';
-import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, generateUUID } from './helpers';
+import {
+  Block,
+  BlockType,
+  BlockPriority,
+  Difficulty,
+  Task,
+  TaskStatus,
+  DailyMetrics,
+  UserSettings,
+  DailyHealthLog,
+  DailyWorkoutLog,
+  MealId,
+  MealCustomOverride,
+  SleepChecklistState,
+} from './types';
+import { addMinutesToTime, dateToStr, durationBetween, todayStr, isRoutineLabel, cleanBlockLabel, generateUUID } from './helpers';
 import { cloudSync } from './cloud-sync';
 import { notificationService } from './notifications';
 import {
-  analyzeHistory, LearnedProfile,
-  getProductivityScore, getCategoryBonus, getOptimalDuration,
+  analyzeHistory,
+  LearnedProfile,
+  getCategoryBonus,
+  getOptimalDuration,
   smartAssignTasksToSlots,
 } from './learning-engine';
-import { generateAISchedule, resetAIClient } from './ai-engine';
+import { generateAISchedule, generateAIMealAdaptation, resetAIClient } from './ai-engine';
 import type { AIScheduleResult, AIProvider } from './ai-engine';
+import {
+  WORKOUT_SPLITS,
+  MEAL_PROTOCOL,
+  evaluateBiomechanicalGuard,
+  BiomechanicalGuardAssessment,
+} from './personal-protocol';
+
+export interface DailyScheduleResult {
+  blocks: Block[];
+  insights?: string[];
+  modeUsed: 'ai' | 'auto';
+  notice?: string;
+}
 
 const STORAGE_KEYS = {
   tasks: 'focusos_tasks',
@@ -16,12 +45,14 @@ const STORAGE_KEYS = {
   metrics: 'focusos_metrics',
   settings: 'focusos_settings',
   profile: 'focusos_learned_profile',
+  healthLogs: 'focusos_health_logs',
+  workoutLogs: 'focusos_workout_logs',
 } as const;
 
 const DEFAULT_SETTINGS: UserSettings = {
   appName: 'FocusOS',
-  wakeTime: '08:30',
-  sleepTime: '23:00',
+  wakeTime: '07:00',
+  sleepTime: '22:30',
   scheduleStartTime: '12:00',
   scheduleEndTime: '18:00',
   arrivalTime: '18:45',
@@ -30,12 +61,24 @@ const DEFAULT_SETTINGS: UserSettings = {
   dailyDeepBlocksMax: 2,
   deepBlockDuration: 50,
   exerciseMandatory: true,
-  exerciseDuration: 25,
-  morningExerciseDuration: 15,
-  nightExerciseDuration: 25,
+  exerciseDuration: 50,
+  workoutSlot: 'morning',
+  transportToSenaMinutes: 25,
+  waterGoalMl: 2500,
+  currentWeightKg: 47,
+  targetWeightKg: 54,
+  postureReminderMinutes: 45,
+  mealTimes: {
+    breakfast: '07:30',
+    postWorkout: '10:30',
+    senaLunch: '14:00',
+    dinner: '20:00',
+  },
+  morningExerciseDuration: 50,
+  nightExerciseDuration: 50,
   workBlockDuration: 30,
-  personalProjectDuration: 20,
-  socialMediaMaxMinutes: 20,
+  personalProjectDuration: 25,
+  socialMediaMaxMinutes: 15,
 };
 
 // ─── Plantillas de rutina diaria ─────────────────────────────────────────────
@@ -51,8 +94,12 @@ type TemplateBlock = {
 
 // ─── Utilidades de tiempo para plantillas ────────────────────────────────────
 
-const _toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
-const _toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const _toMin = (t: string) => {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + m;
+};
+const _toTime = (m: number) =>
+  `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
 
 /** Agrega un bloque a la lista y avanza el cursor. Retorna nuevo cursor. */
 function _push(
@@ -62,102 +109,182 @@ function _push(
   type: BlockType,
   label: string,
   priority: BlockPriority,
-  assignTask?: boolean,
+  assignTask?: boolean
 ): number {
-  blocks.push({ type, label, startTime: _toTime(cursor), endTime: _toTime(cursor + duration), priority, assignTask });
+  if (duration <= 0) return cursor;
+  blocks.push({
+    type,
+    label,
+    startTime: _toTime(cursor),
+    endTime: _toTime(cursor + duration),
+    priority,
+    assignTask,
+  });
   return cursor + duration;
 }
 
-// ─── Generadores dinámicos de plantilla ──────────────────────────────────────
+// ─── Generadores dinámicos de plantilla (Adaptados al Protocolo Clínico) ────
 
-/** Lunes a Viernes — construido dinámicamente desde Settings según el estilo de vida del usuario */
-function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
+/** Lunes a Viernes — construido dinámicamente desde Settings y el protocolo clínico del usuario */
+function generateWeekdayTemplate(
+  s: UserSettings,
+  dayOfWeek: number,
+  workoutLogs: DailyWorkoutLog[],
+  dateStr: string
+): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
-  const wake = _toMin(s.wakeTime || '08:30');
-  const sleep = _toMin(s.sleepTime || '23:00');
+  const wake = _toMin(s.wakeTime || '07:00');
+  const sleep = _toMin(s.sleepTime || '22:30');
 
-  // Asegurar que el horario formal del SENA sea coherente (12:00 a 18:00 por defecto)
   let formalStart = _toMin(s.scheduleStartTime || '12:00');
   let formalEnd = _toMin(s.scheduleEndTime || '18:00');
   let arrival = _toMin(s.arrivalTime || '18:45');
 
   if (formalStart <= wake + 30 || formalEnd <= formalStart || formalEnd > sleep) {
-    formalStart = 12 * 60; // 12:00 PM
-    formalEnd = 18 * 60;   // 06:00 PM
-    arrival = 18 * 60 + 45; // 06:45 PM
+    formalStart = 12 * 60;
+    formalEnd = 18 * 60;
+    arrival = 18 * 60 + 45;
   }
 
+  const workoutSlot = s.workoutSlot ?? 'morning';
+  const exDur = s.exerciseDuration || 50;
   const deepDur = s.deepBlockDuration || 50;
-  const deepMax = s.dailyDeepBlocksMax || 2;
-  const morningExDur = s.morningExerciseDuration ?? 15;
-  const nightExDur = s.nightExerciseDuration ?? 25;
-  const workDur = s.workBlockDuration ?? 30;
-  const personalProjectDur = s.personalProjectDuration ?? 20;
-  const socialDur = s.socialMediaMaxMinutes ?? 20;
+  const transportDur = s.transportToSenaMinutes ?? 25;
 
-  let c = wake; // cursor en minutos
+  const guard = evaluateBiomechanicalGuard(dateStr, workoutLogs);
+  const splitInfo = WORKOUT_SPLITS[guard.recommendedSplit];
+  const exerciseLabel = `Calistenia: ${splitInfo.shortTitle}`;
 
-  // ═══ MAÑANA (08:30 en adelante) ═══
-  // 1. Adaptación y rutina matutina (15 min)
-  if (c + 15 <= formalStart - 30) {
-    c = _push(blocks, c, 15, 'rest', 'Despertar y adaptación', 'low');
+  const mealTimes = s.mealTimes ?? {
+    breakfast: '07:30',
+    postWorkout: '10:30',
+    senaLunch: '14:00',
+    dinner: '20:00',
+  };
+
+  let c = wake;
+
+  // ═══ 1. DESPERTAR Y CRONOBIOLOGÍA (07:00 → 07:30) ═══
+  const breakfastStart = Math.max(c + 15, _toMin(mealTimes.breakfast));
+  if (breakfastStart > c) {
+    c = _push(
+      blocks,
+      c,
+      breakfastStart - c,
+      'rest',
+      'Despertar (1 alarma) · Luz solar + Vaso grande de agua',
+      'high'
+    );
   }
 
-  // 2. Ejercicio matutino corto (15 min)
-  if (morningExDur > 0 && c + morningExDur <= formalStart - 60) {
-    c = _push(blocks, c, morningExDur, 'exercise', 'Ejercicio matutino', 'high');
-  }
+  // ═══ 2. DESAYUNO OBLIGATORIO (07:30 → 08:00) ═══
+  c = _push(blocks, c, 30, 'rest', 'Desayuno obligatorio (Mín. 3 huevos + carbohidrato)', 'high');
 
-  // 3. Desayuno (25 min)
-  if (c + 25 <= formalStart - 45) {
-    c = _push(blocks, c, 25, 'rest', 'Desayuno y energía', 'low');
-  }
-
-  // Ventana matutina antes de prepararse para el SENA
-  const transportDur = 45;
-  const prepDur = 30;
   const transportStart = formalStart - transportDur;
-  const prepStart = transportStart - prepDur;
+  const postWorkoutStart = Math.min(
+    Math.max(c + 60, _toMin(mealTimes.postWorkout)),
+    transportStart - 35
+  );
 
-  const morningFree = prepStart - c;
-  if (morningFree >= 30) {
-    if (morningFree >= 120) {
-      // Entrada tardía (ej. 2:00 PM / 14:00): bloques de estudio ligero y proyectos
-      c = _push(blocks, c, 45, 'light', 'Estudio ligero matutino', 'medium', true);
-      c = _push(blocks, c, 10, 'rest', 'Pausa activa', 'low');
-      c = _push(blocks, c, 45, 'light', 'Proyectos personales / Trabajo', 'medium', true);
-      const lunchDur = Math.min(45, prepStart - c);
-      if (lunchDur >= 20) {
-        c = _push(blocks, c, lunchDur, 'rest', 'Almuerzo temprano', 'low');
+  // ═══ 3. VENTANA MATUTINA (08:00 → 10:30) ═══
+  if (workoutSlot === 'morning') {
+    // 08:00 -> 09:00: Estudio ligero mientras se hace digestión pre-entreno
+    const targetExStart = Math.max(c, 9 * 60); // 9:00 a.m.
+    if (targetExStart - c >= 20) {
+      c = _push(blocks, c, targetExStart - c, 'light', 'Estudio ligero matutino', 'medium', true);
+    }
+    // 09:00 -> 09:50: Única sesión de Calistenia, Hipertrofia y Postura (50 min)
+    if (s.exerciseMandatory && c + exDur <= transportStart - 20) {
+      c = _push(blocks, c, exDur, 'exercise', exerciseLabel, 'high');
+      // 09:50 -> 10:30: Ducha y alistarse
+      const showerDur = Math.max(15, Math.min(40, postWorkoutStart - c));
+      if (showerDur >= 15) {
+        c = _push(blocks, c, showerDur, 'rest', 'Ducha y recuperación', 'low');
       }
-    } else if (morningFree >= 60) {
-      c = _push(blocks, c, 45, 'light', 'Trabajo versátil / Estudio ligero', 'medium', true);
-      if (prepStart - c >= 15) {
-        c = _push(blocks, c, prepStart - c, 'rest', 'Tiempo libre', 'low');
+    }
+  } else {
+    // Si entrena en la tarde: usar la mañana para Bloques Profundos de estudio
+    if (c + deepDur <= postWorkoutStart) {
+      c = _push(blocks, c, deepDur, 'deep', 'Bloque profundo 1 (Postura erguida)', 'high', true);
+      if (c + 10 <= postWorkoutStart) {
+        c = _push(blocks, c, 10, 'rest', 'Pausa postural (Retracción escapular)', 'low');
       }
-    } else {
-      c = _push(blocks, c, morningFree, 'light', 'Repaso matutino', 'medium', true);
+    }
+    if (c + deepDur <= postWorkoutStart) {
+      c = _push(blocks, c, deepDur, 'deep', 'Bloque profundo 2', 'high', true);
+    } else if (postWorkoutStart - c >= 20) {
+      c = _push(blocks, c, postWorkoutStart - c, 'light', 'Estudio ligero matutino', 'medium', true);
     }
   }
 
-  // Preparación y Transporte al SENA (justo antes de la hora de entrada)
-  if (prepStart >= c) {
-    c = _push(blocks, prepStart, prepDur, 'rest', 'Vestirse y prepararse para el SENA', 'low');
+  // ═══ 4. RECARGA POST-ENTRENO PRE-SENA + TERMO DE AGUA (10:30 → 11:00) ═══
+  if (c < transportStart - 20) {
+    const mealDur = Math.min(30, transportStart - c);
+    c = _push(
+      blocks,
+      c,
+      mealDur,
+      'rest',
+      'Recarga Post-Entreno (Pre-SENA) + Llenar termo de agua',
+      'high'
+    );
   }
+
+  // Tiempo restante antes de salir al SENA
+  if (transportStart - c >= 20) {
+    c = _push(
+      blocks,
+      c,
+      transportStart - c,
+      'light',
+      'Trabajo versátil / Alistarse para el SENA',
+      'medium',
+      true
+    );
+  } else if (transportStart > c) {
+    c = _push(blocks, c, transportStart - c, 'rest', 'Alistarse para el SENA', 'low');
+  }
+
+  // ═══ 5. TRANSPORTE AL SENA (11:35 → 12:00) ═══
   c = _push(blocks, transportStart, transportDur, 'rest', 'Transporte al SENA', 'low');
 
-  // ═══ FORMAL: scheduleStartTime → scheduleEndTime (SENA: 12:00 → 18:00) ═══
+  // ═══ 6. FORMACIÓN SENA + PAUSA DE ALMUERZO 2:00 P.M. (12:00 → 18:00) ═══
+  const senaLunchMin = _toMin(mealTimes.senaLunch || '14:00');
   if (formalEnd > formalStart) {
-    blocks.push({
-      type: 'rest',
-      label: 'SENA',
-      startTime: _toTime(formalStart),
-      endTime: _toTime(formalEnd),
-      priority: 'high',
-    });
+    if (senaLunchMin > formalStart + 30 && senaLunchMin + 30 < formalEnd) {
+      blocks.push({
+        type: 'rest',
+        label: 'SENA (Bloque 1 · Hidratación con termo)',
+        startTime: _toTime(formalStart),
+        endTime: _toTime(senaLunchMin),
+        priority: 'high',
+      });
+      blocks.push({
+        type: 'rest',
+        label: 'Almuerzo en pausa del SENA',
+        startTime: _toTime(senaLunchMin),
+        endTime: _toTime(senaLunchMin + 30),
+        priority: 'high',
+      });
+      blocks.push({
+        type: 'rest',
+        label: 'SENA (Bloque 2)',
+        startTime: _toTime(senaLunchMin + 30),
+        endTime: _toTime(formalEnd),
+        priority: 'high',
+      });
+    } else {
+      blocks.push({
+        type: 'rest',
+        label: 'SENA',
+        startTime: _toTime(formalStart),
+        endTime: _toTime(formalEnd),
+        priority: 'high',
+      });
+    }
   }
 
-  // ═══ TRANSICIÓN: Transporte de regreso (18:00 → 18:45) ═══
+  // ═══ 7. TRANSPORTE DE REGRESO (18:00 → 18:45) ═══
   if (arrival > formalEnd) {
     blocks.push({
       type: 'rest',
@@ -168,191 +295,228 @@ function generateWeekdayTemplate(s: UserSettings): TemplateBlock[] {
     });
   }
 
-  // ═══ NOCHE: arrivalTime → sleepTime (18:45 → 23:00 - PICO DE ENERGÍA) ═══
+  // ═══ 8. TARDE / NOCHE (18:45 → 22:30) ═══
   c = Math.max(arrival, formalEnd);
+  const dinnerMin = _toMin(mealTimes.dinner || '20:00');
+  const disconnectMin = Math.max(c + 60, sleep - 30); // 22:00 (30 min antes de dormir a las 22:30)
 
-  // Llegada y Cena (45 min)
-  if (c + 45 <= sleep - 120) {
-    c = _push(blocks, c, 45, 'rest', 'Llegada y cena', 'low');
-  }
-
-  // Bloques Profundos de Noche (Pico de energía: 45-60 min cada uno)
-  const breakDur = 10;
-  for (let i = 0; i < deepMax; i++) {
-    if (c + deepDur > sleep - 60) break; // reservar 60 min para ejercicio nocturno, proyectos y desconexión
-    c = _push(blocks, c, deepDur, 'deep', `Bloque profundo ${i + 1}`, 'high', true);
-
-    if (i < deepMax - 1 && c + breakDur + deepDur <= sleep - 60) {
-      c = _push(blocks, c, breakDur, 'rest', 'Descanso', 'low');
+  if (workoutSlot === 'morning') {
+    // 18:45 -> 19:35: Bloque Profundo 1
+    if (c + deepDur <= dinnerMin) {
+      c = _push(blocks, c, deepDur, 'deep', 'Bloque profundo 1 (Postura erguida)', 'high', true);
+    }
+    // 19:35 -> 20:00: Pausa postural + preparar cena
+    if (dinnerMin > c) {
+      c = _push(
+        blocks,
+        c,
+        dinnerMin - c,
+        'rest',
+        'Pausa postural (Escoliosis) y preparar cena',
+        'low'
+      );
+    }
+  } else {
+    // Si entrena en la tarde: 18:45 -> 19:35 Calistenia + 19:35 -> 20:00 Ducha
+    if (s.exerciseMandatory && c + exDur <= dinnerMin) {
+      c = _push(blocks, c, exDur, 'exercise', exerciseLabel, 'high');
+    }
+    if (dinnerMin > c) {
+      c = _push(blocks, c, dinnerMin - c, 'rest', 'Ducha post-entreno', 'low');
     }
   }
 
-  // Ejercicio nocturno + Ducha (25 min ejercicio)
-  if (s.exerciseMandatory && nightExDur > 0 && c + nightExDur <= sleep - 35) {
-    c = _push(blocks, c, nightExDur, 'exercise', 'Ejercicio nocturno', 'high');
-    if (c + 15 <= sleep - 20) {
-      c = _push(blocks, c, 15, 'rest', 'Ducha', 'low');
+  // ═══ 9. CENA COMPLETA + CORTE DE AGUA (20:00 → 20:30) ═══
+  if (c < disconnectMin - 30) {
+    c = _push(
+      blocks,
+      c,
+      30,
+      'rest',
+      'Cena completa + Corte de líquidos',
+      'high'
+    );
+  }
+
+  // ═══ 10. BLOQUE NOCTURNO (20:30 → 21:45, Modo luz cálida) ═══
+  if (workoutSlot === 'morning' && c + deepDur <= disconnectMin - 15) {
+    c = _push(
+      blocks,
+      c,
+      deepDur,
+      'deep',
+      'Bloque profundo 2 (Modo luz cálida)',
+      'high',
+      true
+    );
+  } else if (c + 45 <= disconnectMin - 15) {
+    c = _push(
+      blocks,
+      c,
+      45,
+      'light',
+      'Proyectos personales / Repaso (Luz cálida)',
+      'medium',
+      true
+    );
+  }
+
+  const remainingBeforeDisconnect = disconnectMin - c;
+  if (remainingBeforeDisconnect >= 20) {
+    const projectTime = Math.min(25, remainingBeforeDisconnect - 15);
+    if (projectTime >= 15) {
+      c = _push(blocks, c, projectTime, 'light', 'Proyectos personales / Repaso', 'medium', true);
     }
+    if (disconnectMin - c >= 10) {
+      c = _push(blocks, c, disconnectMin - c, 'rest', 'Redes sociales (Luz cálida)', 'low');
+    }
+  } else if (remainingBeforeDisconnect > 0) {
+    c = _push(blocks, c, remainingBeforeDisconnect, 'rest', 'Pausa y orden nocturno', 'low');
   }
 
-  // Proyectos personales / Repaso (20 min)
-  if (personalProjectDur > 0 && c + personalProjectDur <= sleep - 20) {
-    c = _push(blocks, c, personalProjectDur, 'light', 'Proyectos personales', 'medium', true);
-  }
-
-  // Redes sociales (15-20 min)
-  if (socialDur > 0 && c + socialDur <= sleep - 10) {
-    c = _push(blocks, c, socialDur, 'rest', 'Redes sociales', 'low');
-  }
-
-  // Prepararse para dormir (15 min)
-  const windDown = Math.min(20, sleep - c);
-  if (windDown >= 10) {
-    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir', 'low');
-  }
+  // ═══ 11. DESCONEXIÓN DE PANTALLAS Y PROTOCOLO DE SUEÑO (22:00 → 22:30) ═══
+  const windDown = Math.max(15, sleep - c);
+  _push(
+    blocks,
+    c,
+    windDown,
+    'rest',
+    'Desconexión de pantallas + Protocolo de sueño (Escoliosis)',
+    'high'
+  );
 
   return blocks;
 }
 
-/** Sábado — construido dinámicamente desde Settings */
+/** Sábado (Día 6: Piernas y Core) — construido dinámicamente desde Settings */
 function generateSaturdayTemplate(s: UserSettings): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
-  const wake = _toMin(s.wakeTime);
-  const sleep = _toMin(s.sleepTime);
-  const deepDur = s.deepBlockDuration || 60;
-  const exDur = s.exerciseDuration || 60;
+  const wake = _toMin(s.wakeTime || '07:00');
+  const sleep = _toMin(s.sleepTime || '22:30');
+  const deepDur = s.deepBlockDuration || 50;
+  const exDur = s.exerciseDuration || 50;
+  const splitInfo = WORKOUT_SPLITS.legs;
 
   let c = wake;
 
-  // Mañana tranquila
-  c = _push(blocks, c, 30, 'rest', 'Despertar', 'low');
-  c = _push(blocks, c, 30, 'rest', 'Desayuno tranquilo', 'low');
+  c = _push(blocks, c, 30, 'rest', 'Despertar (1 alarma) · Luz solar + Vaso de agua', 'high');
+  c = _push(blocks, c, 30, 'rest', 'Desayuno obligatorio (Mín. 3 huevos + arepa/pan)', 'high');
+  c = _push(blocks, c, 60, 'light', 'Repaso / Lectura matutina', 'medium', true);
 
-  // Bloques de proyecto personal
-  if (c + deepDur <= wake + 240) { // dentro de las primeras 4h
-    c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 1', 'high', true);
-    c = _push(blocks, c, 10, 'rest', 'Descanso', 'low');
-    if (c + deepDur <= wake + 300) {
-      c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 2', 'high', true);
-    }
+  // 09:00 - 09:50: Día 6 Piernas y Core
+  if (s.exerciseMandatory) {
+    c = _push(blocks, c, exDur, 'exercise', `Calistenia: ${splitInfo.shortTitle}`, 'high');
+    c = _push(blocks, c, 25, 'rest', 'Ducha y recuperación', 'low');
   }
 
-  // Almuerzo
-  c = _push(blocks, c, 60, 'rest', 'Almuerzo y descanso', 'low');
+  c = _push(blocks, c, 25, 'rest', 'Recarga Post-Entreno (Licuado o sándwich)', 'high');
 
-  // Tiempo libre hasta la tarde
-  const exerciseStart = Math.max(c, sleep - 300); // ~5h antes de dormir
-  if (exerciseStart > c) {
-    c = _push(blocks, c, exerciseStart - c, 'rest', 'Tiempo libre', 'low');
+  // Bloques profundos de fin de semana
+  c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 1', 'high', true);
+  c = _push(blocks, c, 10, 'rest', 'Pausa postural (Retracción escapular)', 'low');
+  c = _push(blocks, c, deepDur, 'deep', 'Proyecto personal – Bloque 2', 'high', true);
+
+  // Almuerzo 2:00 p.m.
+  const lunchTarget = Math.max(c, 14 * 60);
+  if (lunchTarget > c) {
+    c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre', 'low');
+  }
+  c = _push(blocks, c, 45, 'rest', 'Almuerzo completo de casa (Granos + Arroz + Proteína)', 'high');
+
+  // Tarde libre hasta la cena de las 20:00
+  const dinnerTarget = Math.max(c, 20 * 60);
+  if (dinnerTarget > c) {
+    c = _push(blocks, c, dinnerTarget - c, 'rest', 'Tiempo libre y descanso activo', 'low');
   }
 
-  // Ejercicio
-  if (s.exerciseMandatory && c + exDur <= sleep - 60) {
-    c = _push(blocks, c, exDur, 'exercise', 'Ejercicio', 'high');
+  c = _push(blocks, c, 30, 'rest', 'Cena completa + Corte de líquidos', 'high');
+
+  const disconnectMin = Math.max(c, sleep - 30);
+  if (disconnectMin > c) {
+    c = _push(blocks, c, disconnectMin - c, 'rest', 'Tiempo libre moderado (Luz cálida)', 'low');
   }
 
-  // Ducha y cena
-  c = _push(blocks, c, 45, 'rest', 'Ducha y cena', 'low');
-
-  // Tiempo libre nocturno
-  const windDownStart = sleep - 30;
-  if (c < windDownStart) {
-    c = _push(blocks, c, windDownStart - c, 'rest', 'Tiempo libre moderado', 'low');
-  }
-
-  // Dormir
-  const windDown = sleep - c;
-  if (windDown >= 10) {
-    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir', 'low');
-  }
-
+  _push(blocks, c, Math.max(15, sleep - c), 'rest', 'Desconexión de pantallas + Protocolo de sueño (Escoliosis)', 'high');
   return blocks;
 }
 
-/** Domingo — construido dinámicamente desde Settings */
+/** Domingo (Recuperación y Movilidad Postural) — construido dinámicamente desde Settings */
 function generateSundayTemplate(s: UserSettings): TemplateBlock[] {
   const blocks: TemplateBlock[] = [];
-  const wake = _toMin(s.wakeTime);
-  const sleep = _toMin(s.sleepTime);
+  const wake = _toMin(s.wakeTime || '07:00');
+  const sleep = _toMin(s.sleepTime || '22:30');
 
   let c = wake;
 
-  // Mañana libre
-  const noon = Math.max(c + 60, 12 * 60);
-  c = _push(blocks, c, noon - c, 'rest', 'Despertar y mañana libre', 'low');
+  c = _push(blocks, c, 30, 'rest', 'Despertar · Luz solar + Vaso de agua', 'high');
+  c = _push(blocks, c, 35, 'rest', 'Desayuno obligatorio (Mín. 3 huevos)', 'high');
 
-  // Almuerzo
-  c = _push(blocks, c, 60, 'rest', 'Almuerzo', 'low');
+  // Mañana libre + recarga
+  const midMorning = Math.max(c + 30, 10 * 60 + 30);
+  if (midMorning > c) {
+    c = _push(blocks, c, midMorning - c, 'rest', 'Mañana libre', 'low');
+  }
+  c = _push(blocks, c, 25, 'rest', 'Merienda de media mañana (Avena/Fruta/Leche)', 'medium');
 
-  // Tiempo libre
-  const planStart = Math.max(c, sleep - 360); // ~6h antes de dormir
+  const lunchTarget = Math.max(c, 13 * 60 + 30);
+  if (lunchTarget > c) {
+    c = _push(blocks, c, lunchTarget - c, 'rest', 'Tiempo libre familiar', 'low');
+  }
+
+  c = _push(blocks, c, 50, 'rest', 'Almuerzo familiar completo', 'high');
+
+  const planStart = Math.max(c, 16 * 60 + 30);
   if (planStart > c) {
     c = _push(blocks, c, planStart - c, 'rest', 'Tiempo libre', 'low');
   }
 
-  // Planear semana
-  c = _push(blocks, c, 60, 'light', 'Planear semana – entregas y prioridades', 'high', true);
+  c = _push(blocks, c, 50, 'light', 'Planear semana – entregas SENA y prioridades', 'high', true);
 
-  // Ejercicio ligero
-  if (s.exerciseMandatory && c + 30 <= sleep - 90) {
-    c = _push(blocks, c, 30, 'exercise', 'Ejercicio ligero', 'medium');
+  if (s.exerciseMandatory) {
+    c = _push(blocks, c, 25, 'exercise', 'Movilidad torácica y descompresión de escoliosis', 'medium');
   }
 
-  // Descanso
-  c = _push(blocks, c, 30, 'rest', 'Descanso', 'low');
-
-  // Ducha y cena
-  c = _push(blocks, c, 45, 'rest', 'Ducha y cena', 'low');
-
-  // Tiempo libre nocturno
-  const windDownStart = sleep - 30;
-  if (c < windDownStart) {
-    c = _push(blocks, c, windDownStart - c, 'rest', 'Tiempo libre (relajarse)', 'low');
+  const dinnerTarget = Math.max(c, 20 * 60);
+  if (dinnerTarget > c) {
+    c = _push(blocks, c, dinnerTarget - c, 'rest', 'Descanso y preparación semanal', 'low');
   }
 
-  // Dormir temprano
-  const windDown = sleep - c;
-  if (windDown >= 10) {
-    _push(blocks, c, windDown, 'rest', 'Prepararse para dormir temprano', 'low');
+  c = _push(blocks, c, 30, 'rest', 'Cena completa + Corte de líquidos', 'high');
+
+  const disconnectMin = Math.max(c, sleep - 30);
+  if (disconnectMin > c) {
+    c = _push(blocks, c, disconnectMin - c, 'rest', 'Relajación (Luz cálida)', 'low');
   }
 
+  _push(blocks, c, Math.max(15, sleep - c), 'rest', 'Desconexión de pantallas + Protocolo de sueño (Escoliosis)', 'high');
   return blocks;
 }
 
 /** Retorna la plantilla adecuada según el día de la semana (0=dom … 6=sáb) */
-function getTemplateForDay(dayOfWeek: number, settings: UserSettings): TemplateBlock[] {
+function getTemplateForDay(
+  dayOfWeek: number,
+  settings: UserSettings,
+  workoutLogs: DailyWorkoutLog[],
+  dateStr: string
+): TemplateBlock[] {
   if (dayOfWeek === 6) return generateSaturdayTemplate(settings);
   if (dayOfWeek === 0) return generateSundayTemplate(settings);
-  return generateWeekdayTemplate(settings);
+  return generateWeekdayTemplate(settings, dayOfWeek, workoutLogs, dateStr);
 }
 
 // ─── Smart Task Scheduling ──────────────────────────────────────────────────
 
-/** Sesiones de trabajo por semana según dificultad de la tarea */
 const SESSIONS_PER_WEEK: Record<Difficulty, number> = {
-  high: 5,    // casi diario (lun–vie)
-  medium: 3,  // cada ~2 días
-  low: 1,     // una vez por semana
+  high: 5,
+  medium: 3,
+  low: 1,
 };
 
-/**
- * Calcula un puntaje de urgencia para una tarea.
- * Mayor puntaje = más urgente = debe priorizarse.
- *
- * Factores:
- * - Días restantes hasta la fecha de entrega
- * - Dificultad (sesiones necesarias por semana)
- * - Si es entregable (isDeliverable)
- * - Si está vencida (overdue)
- * - Perfil aprendido: categorías con bajo rendimiento se priorizan más
- */
 function calculateTaskUrgency(task: Task, referenceDate: string, profile?: LearnedProfile | null): number {
   if (task.status === 'terminada') return -1;
 
-  // Tareas sin fecha: urgencia base según dificultad y estado
   if (!task.dueDate) {
     let base = task.difficulty === 'high' ? 3 : task.difficulty === 'medium' ? 2 : 1;
-    // En progreso → un poco más de prioridad
     if (task.status === 'en-progreso' || task.status === 'en-progreso-aplazada') base += 2;
     if (profile) base *= getCategoryBonus(profile, task);
     return base;
@@ -363,24 +527,14 @@ function calculateTaskUrgency(task: Task, referenceDate: string, profile?: Learn
   const due = new Date(dueStr + 'T12:00:00');
   const daysLeft = Math.ceil((due.getTime() - ref.getTime()) / 86_400_000);
 
-  // Vencida → máxima urgencia (más días vencida = más urgente)
   if (daysLeft < 0) return 1000 + Math.abs(daysLeft) * 10;
-
-  // Vence hoy
   if (daysLeft === 0) return 500;
 
   const sessionsPerWeek = SESSIONS_PER_WEEK[task.difficulty];
-
-  // urgency = sesiones necesarias / días restantes
   let urgency = (sessionsPerWeek * 10) / Math.max(1, daysLeft);
 
-  // Bonus para entregables
   if (task.isDeliverable) urgency *= 1.5;
-
-  // Bonus extra por dificultad alta cuando quedan pocos días
   if (task.difficulty === 'high' && daysLeft <= 3) urgency *= 2;
-
-  // Bonus del perfil aprendido: categorías con bajo rendimiento → más urgencia
   if (profile) {
     urgency *= getCategoryBonus(profile, task);
   }
@@ -388,20 +542,10 @@ function calculateTaskUrgency(task: Task, referenceDate: string, profile?: Learn
   return urgency;
 }
 
-/**
- * Determina si una tarea debe programarse para trabajo en un día dado.
- * La tarea se programa TODOS los días desde hoy hasta su fecha de entrega.
- * Solo se excluye si el día ya tiene un bloque con esa tarea asignada.
- */
 function shouldScheduleTaskOnDay(task: Task, date: string): boolean {
   if (!task.dueDate || task.status === 'terminada' || task.status === 'aplazada') return false;
-
   const dueStr = task.dueDate.split('T')[0];
-
-  // Tarea vencida → programar siempre (arrastrar)
   if (date > dueStr) return true;
-
-  // Programar en cualquier día hasta la fecha de entrega (inclusive)
   return date <= dueStr;
 }
 
@@ -410,7 +554,6 @@ function loadFromStorage<T>(key: string, fallback: T): T {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
     const parsed = JSON.parse(raw);
-    // Proteger contra valores null/undefined parseados
     if (parsed === null || parsed === undefined) return fallback;
     return parsed as T;
   } catch {
@@ -424,76 +567,131 @@ const CLOUD_COLLECTIONS: Record<string, string> = {
   [STORAGE_KEYS.metrics]: 'metrics',
   [STORAGE_KEYS.settings]: 'settings',
   [STORAGE_KEYS.profile]: 'profile',
+  [STORAGE_KEYS.healthLogs]: 'health_logs',
+  [STORAGE_KEYS.workoutLogs]: 'workout_logs',
 };
 
-/** Referencia al store para notificar cambios desde saveToStorage */
 let _storeInstance: Store | null = null;
 
 function saveToStorage<T>(key: string, value: T): void {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-    // Subir a Firebase Cloud
     const collection = CLOUD_COLLECTIONS[key];
     if (collection) cloudSync.uploadDebounced(collection, value);
-    // Notificar al store para que actualice la UI
     _storeInstance?.scheduleNotify();
   } catch (e) {
     console.error(`Error saving ${key} to localStorage:`, e);
   }
 }
 
+function createEmptyHealthLog(date: string): DailyHealthLog {
+  return {
+    date,
+    waterMl: 0,
+    mealsCompleted: {
+      breakfast: false,
+      post_workout: false,
+      sena_lunch: false,
+      dinner: false,
+    },
+    mealSelectedOption: {},
+    mealCustomOverride: {},
+    sleepChecklist: {
+      waterCut830: false,
+      blueLightOff: false,
+      nasalWash: false,
+      singleAlarmFar: false,
+      sideOrBackPosture: false,
+    },
+    postureBreaksCount: 0,
+  };
+}
+
 class Store {
   private tasks: Task[] = loadFromStorage<Task[]>(STORAGE_KEYS.tasks, []);
   private blocks: Block[] = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
   private metrics: DailyMetrics[] = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
-  private settings: UserSettings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
+  private settings: UserSettings = {
+    ...DEFAULT_SETTINGS,
+    ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}),
+  };
   private profile: LearnedProfile | null = loadFromStorage<LearnedProfile | null>(STORAGE_KEYS.profile, null);
+  private healthLogs: DailyHealthLog[] = loadFromStorage<DailyHealthLog[]>(STORAGE_KEYS.healthLogs, []);
+  private workoutLogs: DailyWorkoutLog[] = loadFromStorage<DailyWorkoutLog[]>(STORAGE_KEYS.workoutLogs, []);
 
   constructor() {
     _storeInstance = this;
     this.migrateTaskStatuses();
     this.migrateSettings();
-    // Persist merged settings so new default fields get saved
+    this.migrateBlockLabels();
     saveToStorage(STORAGE_KEYS.settings, this.settings);
-    // Recalcular perfil de aprendizaje al iniciar
     this.refreshProfile();
   }
 
-  /** Migra campos legacy de settings */
+  /** Migra campos legacy de settings al nuevo protocolo clínico */
   private migrateSettings(): void {
-    // geminiApiKey → aiApiKey
     if (this.settings.geminiApiKey && !this.settings.aiApiKey) {
       this.settings.aiApiKey = this.settings.geminiApiKey;
       this.settings.aiProvider = this.settings.aiProvider ?? 'gemini';
-      delete this.settings.geminiApiKey;
+    }
+    if (this.settings.aiApiKey?.startsWith('AIza') && !this.settings.geminiApiKey) {
+      this.settings.geminiApiKey = this.settings.aiApiKey;
+    }
+    if (this.settings.aiApiKey?.startsWith('gsk_') && !this.settings.groqApiKey) {
+      this.settings.groqApiKey = this.settings.aiApiKey;
     }
 
-    // Corregir horario SENA e incoherencias de horas si venían de versiones legacy
-    if (!this.settings.scheduleStartTime || this.settings.scheduleStartTime < '09:00' || this.settings.scheduleEndTime === '23:00' || this.settings.scheduleEndTime <= this.settings.scheduleStartTime) {
+    if (
+      !this.settings.scheduleStartTime ||
+      this.settings.scheduleStartTime < '09:00' ||
+      this.settings.scheduleEndTime === '23:00' ||
+      this.settings.scheduleEndTime <= this.settings.scheduleStartTime
+    ) {
       this.settings.scheduleStartTime = '12:00';
       this.settings.scheduleEndTime = '18:00';
       this.settings.arrivalTime = '18:45';
     }
-    if (!this.settings.wakeTime || this.settings.wakeTime < '06:00') {
-      this.settings.wakeTime = '08:30';
+
+    // Migrar wakeTime 08:30 y sleepTime 23:00 legacy al protocolo 07:00 - 22:30 si no se habían configurado los nuevos campos
+    if (!this.settings.workoutSlot) {
+      this.settings.workoutSlot = 'morning';
+      if (this.settings.wakeTime === '08:30') this.settings.wakeTime = '07:00';
+      if (this.settings.sleepTime === '23:00') this.settings.sleepTime = '22:30';
+      if (this.settings.exerciseDuration === 25) this.settings.exerciseDuration = 50;
+    }
+
+    if (!this.settings.wakeTime || this.settings.wakeTime < '05:00') {
+      this.settings.wakeTime = '07:00';
     }
     if (!this.settings.sleepTime) {
-      this.settings.sleepTime = '23:00';
+      this.settings.sleepTime = '22:30';
     }
     if (!this.settings.arrivalTime || this.settings.arrivalTime <= this.settings.scheduleEndTime) {
       this.settings.arrivalTime = '18:45';
     }
+    if (!this.settings.mealTimes) {
+      this.settings.mealTimes = {
+        breakfast: '07:30',
+        postWorkout: '10:30',
+        senaLunch: '14:00',
+        dinner: '20:00',
+      };
+    }
+    if (!this.settings.waterGoalMl) this.settings.waterGoalMl = 2500;
+    if (!this.settings.currentWeightKg) this.settings.currentWeightKg = 47;
+    if (!this.settings.targetWeightKg) this.settings.targetWeightKg = 54;
+    if (!this.settings.transportToSenaMinutes) this.settings.transportToSenaMinutes = 25;
+    if (!this.settings.postureReminderMinutes) this.settings.postureReminderMinutes = 45;
   }
 
-  /** Migra status antiguos (pending/in-progress/completed) a los nuevos */
   private migrateTaskStatuses(): void {
     const statusMap: Record<string, TaskStatus> = {
-      'pending': 'sin-iniciar',
+      pending: 'sin-iniciar',
       'in-progress': 'en-progreso',
-      'completed': 'terminada',
+      completed: 'terminada',
     };
     let changed = false;
-    this.tasks = this.tasks.map(t => {
+    this.tasks = this.tasks.map((t) => {
       const mapped = statusMap[t.status as string];
       if (mapped) {
         changed = true;
@@ -504,26 +702,38 @@ class Store {
     if (changed) saveToStorage(STORAGE_KEYS.tasks, this.tasks);
   }
 
-  // ─── Cloud Sync ────────────────────────────────────────────────────────────
+  private migrateBlockLabels(): void {
+    let changed = false;
+    this.blocks = this.blocks.map((b) => {
+      if (b.label) {
+        const cleaned = cleanBlockLabel(b.label);
+        if (cleaned !== b.label) {
+          changed = true;
+          return { ...b, label: cleaned };
+        }
+      }
+      return b;
+    });
+    if (changed) saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+  }
+
+  // ─── Cloud Sync & Listeners ────────────────────────────────────────────────
 
   private listeners: Array<() => void> = [];
   private notifyPending = false;
   private batchDepth = 0;
 
-  /** Suscribe a cambios en el store (para refresco automático de UI) */
   subscribe(fn: () => void): () => void {
     this.listeners.push(fn);
-    return () => { this.listeners = this.listeners.filter(l => l !== fn); };
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== fn);
+    };
   }
 
   private notifyListeners(): void {
-    this.listeners.forEach(fn => fn());
+    this.listeners.forEach((fn) => fn());
   }
 
-  /**
-   * Agrupa múltiples mutaciones en una sola notificación.
-   * Usar: store.batch(() => { ...varias operaciones... });
-   */
   batch(fn: () => void): void {
     this.batchDepth++;
     try {
@@ -537,10 +747,6 @@ class Store {
     }
   }
 
-  /**
-   * Notifica a los listeners inmediatamente usando microtask.
-   * Si estamos dentro de un batch, difiere hasta el final.
-   */
   scheduleNotify(): void {
     if (this.batchDepth > 0) {
       this.notifyPending = true;
@@ -556,14 +762,186 @@ class Store {
     });
   }
 
-  /** Recarga datos desde localStorage (usado cuando cloud sync actualiza localStorage) */
   reloadFromStorage(): void {
     this.tasks = loadFromStorage<Task[]>(STORAGE_KEYS.tasks, []);
     this.blocks = loadFromStorage<Block[]>(STORAGE_KEYS.blocks, []);
     this.metrics = loadFromStorage<DailyMetrics[]>(STORAGE_KEYS.metrics, []);
-    this.settings = { ...DEFAULT_SETTINGS, ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}) };
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...loadFromStorage<Partial<UserSettings>>(STORAGE_KEYS.settings, {}),
+    };
+    this.healthLogs = loadFromStorage<DailyHealthLog[]>(STORAGE_KEYS.healthLogs, []);
+    this.workoutLogs = loadFromStorage<DailyWorkoutLog[]>(STORAGE_KEYS.workoutLogs, []);
     this.refreshProfile();
     this.notifyListeners();
+  }
+
+  // ─── Health, Nutrition & Workout Logs ──────────────────────────────────────
+
+  getHealthLog(date: string): DailyHealthLog {
+    const existing = this.healthLogs.find((h) => h.date === date);
+    if (existing) {
+      return {
+        ...createEmptyHealthLog(date),
+        ...existing,
+        mealsCompleted: {
+          ...createEmptyHealthLog(date).mealsCompleted,
+          ...(existing.mealsCompleted ?? {}),
+        },
+        sleepChecklist: {
+          ...createEmptyHealthLog(date).sleepChecklist!,
+          ...(existing.sleepChecklist ?? {}),
+        },
+      };
+    }
+    return createEmptyHealthLog(date);
+  }
+
+  getAllHealthLogs(): DailyHealthLog[] {
+    return this.healthLogs;
+  }
+
+  updateHealthLog(date: string, updates: Partial<DailyHealthLog>): void {
+    this.batch(() => {
+      const current = this.getHealthLog(date);
+      const updated: DailyHealthLog = {
+        ...current,
+        ...updates,
+        date,
+      };
+      const idx = this.healthLogs.findIndex((h) => h.date === date);
+      if (idx !== -1) {
+        this.healthLogs = this.healthLogs.map((h) => (h.date === date ? updated : h));
+      } else {
+        this.healthLogs = [...this.healthLogs, updated];
+      }
+      saveToStorage(STORAGE_KEYS.healthLogs, this.healthLogs);
+
+      if (updates.weightKg && updates.weightKg > 30) {
+        this.settings = { ...this.settings, currentWeightKg: updates.weightKg };
+        saveToStorage(STORAGE_KEYS.settings, this.settings);
+      }
+
+      this.recalcDailyMetrics(date);
+    });
+  }
+
+  addWater(date: string, deltaMl: number): void {
+    const log = this.getHealthLog(date);
+    const nextWater = Math.max(0, Math.min(5000, (log.waterMl || 0) + deltaMl));
+    this.updateHealthLog(date, { waterMl: nextWater });
+  }
+
+  toggleMeal(date: string, mealId: MealId, selectedOptionId?: string): void {
+    const log = this.getHealthLog(date);
+    const nextCompleted = !log.mealsCompleted[mealId];
+    const mealsCompleted = { ...log.mealsCompleted, [mealId]: nextCompleted };
+    const mealSelectedOption = { ...log.mealSelectedOption };
+    if (selectedOptionId) {
+      mealSelectedOption[mealId] = selectedOptionId;
+    } else if (!mealSelectedOption[mealId]) {
+      mealSelectedOption[mealId] = MEAL_PROTOCOL[mealId].options[0]?.id;
+    }
+    this.updateHealthLog(date, { mealsCompleted, mealSelectedOption });
+  }
+
+  selectMealOption(date: string, mealId: MealId, optionId: string): void {
+    const log = this.getHealthLog(date);
+    this.updateHealthLog(date, {
+      mealSelectedOption: { ...log.mealSelectedOption, [mealId]: optionId },
+    });
+  }
+
+  setMealCustomOverride(date: string, mealId: MealId, override: MealCustomOverride | null): void {
+    const log = this.getHealthLog(date);
+    const mealCustomOverride = { ...log.mealCustomOverride };
+    if (override) {
+      mealCustomOverride[mealId] = override;
+    } else {
+      delete mealCustomOverride[mealId];
+    }
+    this.updateHealthLog(date, { mealCustomOverride });
+  }
+
+  async adaptMealWithAI(
+    date: string,
+    mealId: MealId,
+    availableIngredients: string[],
+    customText: string
+  ): Promise<MealCustomOverride> {
+    const { provider, apiKey } = this.getAIConfig();
+    const override = await generateAIMealAdaptation(
+      provider,
+      apiKey,
+      mealId,
+      availableIngredients,
+      customText
+    );
+    this.setMealCustomOverride(date, mealId, override);
+    return override;
+  }
+
+  toggleSleepCheckItem(date: string, key: keyof SleepChecklistState): void {
+    const log = this.getHealthLog(date);
+    const currentSleep = log.sleepChecklist ?? createEmptyHealthLog(date).sleepChecklist!;
+    this.updateHealthLog(date, {
+      sleepChecklist: {
+        ...currentSleep,
+        [key]: !currentSleep[key],
+      },
+    });
+  }
+
+  incrementPostureBreak(date: string): void {
+    const log = this.getHealthLog(date);
+    this.updateHealthLog(date, {
+      postureBreaksCount: (log.postureBreaksCount ?? 0) + 1,
+    });
+  }
+
+  getBiomechanicalGuard(date: string): BiomechanicalGuardAssessment {
+    return evaluateBiomechanicalGuard(date, this.workoutLogs);
+  }
+
+  getWorkoutLog(date: string): DailyWorkoutLog {
+    const existing = this.workoutLogs.find((w) => w.date === date);
+    if (existing) return existing;
+
+    const guard = this.getBiomechanicalGuard(date);
+    const splitDef = WORKOUT_SPLITS[guard.recommendedSplit];
+    const exercises: DailyWorkoutLog['exercises'] = {};
+    for (const ex of splitDef.exercises) {
+      exercises[ex.id] = {
+        setsDone: 0,
+        repsAchieved: ex.reps,
+        backpackWeightNote: ex.usesBackpack ? 'Morral con libros' : '',
+      };
+    }
+
+    return {
+      date,
+      splitType: guard.recommendedSplit,
+      completed: false,
+      backpackWeightKg: 4,
+      exercises,
+    };
+  }
+
+  getAllWorkoutLogs(): DailyWorkoutLog[] {
+    return this.workoutLogs;
+  }
+
+  saveWorkoutLog(date: string, log: DailyWorkoutLog): void {
+    this.batch(() => {
+      const idx = this.workoutLogs.findIndex((w) => w.date === date);
+      if (idx !== -1) {
+        this.workoutLogs = this.workoutLogs.map((w) => (w.date === date ? log : w));
+      } else {
+        this.workoutLogs = [...this.workoutLogs, log];
+      }
+      saveToStorage(STORAGE_KEYS.workoutLogs, this.workoutLogs);
+      this.recalcDailyMetrics(date);
+    });
   }
 
   // ─── Tasks ─────────────────────────────────────────────────────────────────
@@ -573,27 +951,23 @@ class Store {
   }
 
   getTask(id: string): Task | undefined {
-    return this.tasks.find(t => t.id === id);
+    return this.tasks.find((t) => t.id === id);
   }
 
-  /** Busca una tarea por su ID externo (Classroom/Calendar) */
   findTaskByExternalId(externalId: string): Task | undefined {
-    return this.tasks.find(t => t.externalId === externalId);
+    return this.tasks.find((t) => t.externalId === externalId);
   }
 
-  /** Obtiene todas las tareas importadas de una fuente específica */
   getTasksBySource(source: 'classroom' | 'calendar' | 'manual'): Task[] {
-    return this.tasks.filter(t => t.source === source);
+    return this.tasks.filter((t) => t.source === source);
   }
 
   addTask(task: Task): void {
     this.tasks = [...this.tasks, { ...task, _v: Date.now() } as Task];
     saveToStorage(STORAGE_KEYS.tasks, this.tasks);
     if (task.dueDate) {
-      // Tarea con fecha: crear bloque nuevo si es urgente hoy
       this.autoAssignBlock(task);
     } else {
-      // Tarea sin fecha: asignarla a bloques libres existentes de hoy
       const today = todayStr();
       if (this.getBlocks(today).length > 0) {
         this.assignUnblockedTasks(today);
@@ -601,34 +975,24 @@ class Store {
     }
   }
 
-  /**
-   * Crea automáticamente un bloque para la tarea HOY si:
-   * - La tarea tiene fecha de entrega (dueDate)
-   * - La urgencia requiere trabajar hoy (según dificultad y días restantes)
-   * - Ya existen bloques para hoy (la rutina fue generada)
-   * - La tarea no tiene ya un bloque asignado hoy
-   * Luego reorganiza todos los bloques del día.
-   */
   private autoAssignBlock(task: Task): void {
     if (!task.dueDate || task.status === 'terminada') return;
 
     const today = todayStr();
-
-    // Solo programar si la tarea debe trabajarse hoy según su urgencia
     if (!shouldScheduleTaskOnDay(task, today)) return;
 
     const existingBlocks = this.getBlocks(today);
-
-    // Solo auto-crear si ya hay bloques hoy (la rutina fue generada)
     if (existingBlocks.length === 0) return;
+    if (existingBlocks.some((b) => b.taskId === task.id)) return;
 
-    // Verificar que no tenga ya un bloque hoy
-    if (existingBlocks.some(b => b.taskId === task.id)) return;
-
-    const duration = task.difficulty === 'high' ? 90
-      : task.difficulty === 'medium' ? 60 : 45;
-    const priority = task.isDeliverable || task.difficulty === 'high' ? 'high'
-      : task.difficulty === 'medium' ? 'medium' : 'low';
+    const duration =
+      task.difficulty === 'high' ? 90 : task.difficulty === 'medium' ? 60 : 45;
+    const priority =
+      task.isDeliverable || task.difficulty === 'high'
+        ? 'high'
+        : task.difficulty === 'medium'
+          ? 'medium'
+          : 'low';
 
     const freeSlot = this.findNextFreeSlot(today, duration, this.settings.arrivalTime);
     const startTime = freeSlot ?? this.settings.arrivalTime;
@@ -653,54 +1017,62 @@ class Store {
 
   updateTask(id: string, updates: Partial<Task>): void {
     this.batch(() => {
-    const oldTask = this.tasks.find(t => t.id === id);
-    const oldDate = oldTask?.dueDate?.split('T')[0];
+      const oldTask = this.tasks.find((t) => t.id === id);
+      const oldDate = oldTask?.dueDate?.split('T')[0];
 
-    this.tasks = this.tasks.map(t => t.id === id ? { ...t, ...updates, _v: Date.now() } : t);
-    saveToStorage(STORAGE_KEYS.tasks, this.tasks);
+      this.tasks = this.tasks.map((t) =>
+        t.id === id ? { ...t, ...updates, _v: Date.now() } : t
+      );
+      saveToStorage(STORAGE_KEYS.tasks, this.tasks);
 
-    const updatedTask = this.tasks.find(t => t.id === id);
-    const newDate = updatedTask?.dueDate?.split('T')[0];
+      const updatedTask = this.tasks.find((t) => t.id === id);
+      const newDate = updatedTask?.dueDate?.split('T')[0];
 
-    // Update embedded task references in blocks
-    this.blocks = this.blocks.map(b =>
-      b.taskId === id ? { ...b, task: updatedTask, _v: Date.now() } : b
-    );
-    saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+      this.blocks = this.blocks.map((b) =>
+        b.taskId === id ? { ...b, task: updatedTask, _v: Date.now() } : b
+      );
+      saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-    // Si cambió la fecha de entrega, re-evaluar programación con nueva urgencia
-    if (oldDate && newDate && oldDate !== newDate && updatedTask) {
-      this.autoAssignBlock(updatedTask);
-    } else if (newDate) {
-      if (updates.difficulty && oldTask && updates.difficulty !== oldTask.difficulty) {
-        const newDuration = updates.difficulty === 'high' ? 90
-          : updates.difficulty === 'medium' ? 60 : 45;
-        const newPriority = (updatedTask?.isDeliverable || updates.difficulty === 'high') ? 'high'
-          : updates.difficulty === 'medium' ? 'medium' : 'low';
-        const taskBlock = this.blocks.find(b => b.taskId === id && b.status === 'pending');
-        if (taskBlock) {
-          this.blocks = this.blocks.map(b =>
-            b.id === taskBlock.id ? {
-              ...b,
-              duration: newDuration,
-              endTime: addMinutesToTime(b.startTime, newDuration),
-              priority: newPriority,
-              _v: Date.now(),
-            } : b
+      if (oldDate && newDate && oldDate !== newDate && updatedTask) {
+        this.autoAssignBlock(updatedTask);
+      } else if (newDate) {
+        if (updates.difficulty && oldTask && updates.difficulty !== oldTask.difficulty) {
+          const newDuration =
+            updates.difficulty === 'high' ? 90 : updates.difficulty === 'medium' ? 60 : 45;
+          const newPriority =
+            updatedTask?.isDeliverable || updates.difficulty === 'high'
+              ? 'high'
+              : updates.difficulty === 'medium'
+                ? 'medium'
+                : 'low';
+          const taskBlock = this.blocks.find(
+            (b) => b.taskId === id && b.status === 'pending'
           );
-          saveToStorage(STORAGE_KEYS.blocks, this.blocks);
-          this.reorganizeBlocks(taskBlock.date);
+          if (taskBlock) {
+            this.blocks = this.blocks.map((b) =>
+              b.id === taskBlock.id
+                ? {
+                    ...b,
+                    duration: newDuration,
+                    endTime: addMinutesToTime(b.startTime, newDuration),
+                    priority: newPriority,
+                    _v: Date.now(),
+                  }
+                : b
+            );
+            saveToStorage(STORAGE_KEYS.blocks, this.blocks);
+            this.reorganizeBlocks(taskBlock.date);
+          }
+        }
+
+        if (updatedTask && !this.blocks.some((b) => b.taskId === id)) {
+          this.autoAssignBlock(updatedTask);
         }
       }
 
-      if (updatedTask && !this.blocks.some(b => b.taskId === id)) {
-        this.autoAssignBlock(updatedTask);
+      if (updates.status === 'terminada' && newDate) {
+        this.reorganizeBlocks(newDate);
       }
-    }
-
-    if (updates.status === 'terminada' && newDate) {
-      this.reorganizeBlocks(newDate);
-    }
     });
   }
 
@@ -708,13 +1080,13 @@ class Store {
     this.batch(() => {
       cloudSync.trackDeletion('tasks', id);
       const affectedDates = new Set(
-        this.blocks.filter(b => b.taskId === id).map(b => b.date)
+        this.blocks.filter((b) => b.taskId === id).map((b) => b.date)
       );
 
-      this.tasks = this.tasks.filter(t => t.id !== id);
+      this.tasks = this.tasks.filter((t) => t.id !== id);
       saveToStorage(STORAGE_KEYS.tasks, this.tasks);
 
-      this.blocks = this.blocks.map(b =>
+      this.blocks = this.blocks.map((b) =>
         b.taskId === id ? { ...b, taskId: undefined, task: undefined, _v: Date.now() } : b
       );
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
@@ -726,47 +1098,50 @@ class Store {
     });
   }
 
-  /**
-   * Busca tareas del día que no tienen bloque asignado y las asigna
-   * a bloques libres (sin tarea) del mismo día.
-   * Usa el perfil aprendido para asignar tareas difíciles a bloques más productivos.
-   */
   private assignUnblockedTasks(date: string): void {
     const dayBlocks = this.getBlocks(date);
     const tasksWithBlocks = new Set(
-      dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
+      dayBlocks.filter((b) => b.taskId).map((b) => b.taskId!)
     );
-    const dayTasks = this.getTasksForDayWithCarryOver(date)
-      .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
+    const dayTasks = this.getTasksForDayWithCarryOver(date).filter(
+      (t) => !tasksWithBlocks.has(t.id) && t.status !== 'terminada'
+    );
 
-    // Bloques libres (sin tarea, pendientes, solo deep/light de estudio — no rest, exercise, ni rutinas)
     const freeBlocks = dayBlocks.filter(
-      b => !b.taskId && b.status === 'pending' && b.type !== 'rest' && b.type !== 'exercise'
-        && !isRoutineLabel(b.label ?? '')
+      (b) =>
+        !b.taskId &&
+        b.status === 'pending' &&
+        b.type !== 'rest' &&
+        b.type !== 'exercise' &&
+        !isRoutineLabel(b.label ?? '')
     );
 
     if (dayTasks.length === 0 || freeBlocks.length === 0) return;
 
     if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
-      // Asignación inteligente con perfil
       const blockSlots = freeBlocks.map((b, i) => ({
-        index: i, type: b.type, startTime: b.startTime,
+        index: i,
+        type: b.type,
+        startTime: b.startTime,
       }));
       const assignment = smartAssignTasksToSlots(dayTasks, blockSlots, this.profile);
       for (const [idx, task] of assignment) {
         const block = freeBlocks[idx];
-        this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() } : b
+        this.blocks = this.blocks.map((b) =>
+          b.id === block.id
+            ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() }
+            : b
         );
       }
     } else {
-      // Sin perfil: asignar en orden
       const toAssign = Math.min(dayTasks.length, freeBlocks.length);
       for (let i = 0; i < toAssign; i++) {
         const block = freeBlocks[i];
         const task = dayTasks[i];
-        this.blocks = this.blocks.map(b =>
-          b.id === block.id ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() } : b
+        this.blocks = this.blocks.map((b) =>
+          b.id === block.id
+            ? { ...b, taskId: task.id, task, label: task.subject, _v: Date.now() }
+            : b
         );
       }
     }
@@ -774,42 +1149,25 @@ class Store {
   }
 
   toggleSubtask(taskId: string, subtaskId: string): void {
-    const task = this.tasks.find(t => t.id === taskId);
+    const task = this.tasks.find((t) => t.id === taskId);
     if (!task || !task.subtasks) return;
-    const subtasks = task.subtasks.map(s =>
+    const subtasks = task.subtasks.map((s) =>
       s.id === subtaskId ? { ...s, done: !s.done } : s
     );
     this.updateTask(taskId, { subtasks });
   }
 
-  /**
-   * Devuelve las tareas que deben trabajarse en un día dado,
-   * ordenadas por urgencia dinámica (más urgente primero).
-   *
-   * Ya no depende solo de la fecha de entrega:
-   * - Dificultad determina frecuencia: HIGH=5/sem, MEDIUM=3/sem, LOW=1/sem
-   * - Deadline cercano + alta dificultad → prioridad máxima
-   * - Tareas vencidas siempre se incluyen
-   * - Tareas sin fecha en progreso también se incluyen
-   *
-   * Ejemplo: Hoy lunes, Tarea X (HIGH, entrega miércoles) tiene más urgencia
-   *          que Tarea Y (MEDIUM, entrega viernes) porque tiene menos días y más sesiones.
-   */
   getTasksForDayWithCarryOver(date: string): Task[] {
-    const activeTasks = this.tasks.filter(t =>
-      t.status !== 'terminada' && t.status !== 'aplazada'
+    const activeTasks = this.tasks.filter(
+      (t) => t.status !== 'terminada' && t.status !== 'aplazada'
     );
 
-    // Tareas con fecha que deben trabajarse hoy según urgencia y dificultad
-    const schedulable = activeTasks.filter(t =>
-      t.dueDate && shouldScheduleTaskOnDay(t, date)
+    const schedulable = activeTasks.filter(
+      (t) => t.dueDate && shouldScheduleTaskOnDay(t, date)
     );
 
-    // Tareas sin fecha de entrega: incluir todas las activas para que
-    // se asignen a bloques profundos disponibles
-    const noDateTasks = activeTasks.filter(t => !t.dueDate);
+    const noDateTasks = activeTasks.filter((t) => !t.dueDate);
 
-    // Deduplicar
     const seen = new Set<string>();
     const all: Task[] = [];
     for (const t of [...schedulable, ...noDateTasks]) {
@@ -819,7 +1177,6 @@ class Store {
       }
     }
 
-    // Ordenar por urgencia (mayor primero) — usa perfil aprendido
     return all.sort((a, b) => {
       const ua = calculateTaskUrgency(a, date, this.profile);
       const ub = calculateTaskUrgency(b, date, this.profile);
@@ -827,49 +1184,40 @@ class Store {
     });
   }
 
-  /**
-   * Comprueba si un rango horario solapa con algún bloque existente.
-   * Excluye el bloque con `excludeId` (útil al editar).
-   */
-  hasBlockOverlap(date: string, startTime: string, endTime: string, excludeId?: string): boolean {
-    const blocks = this.getBlocks(date).filter(b => !excludeId || b.id !== excludeId);
-    return blocks.some(b => startTime < b.endTime && endTime > b.startTime);
+  hasBlockOverlap(
+    date: string,
+    startTime: string,
+    endTime: string,
+    excludeId?: string
+  ): boolean {
+    const blocks = this.getBlocks(date).filter((b) => !excludeId || b.id !== excludeId);
+    return blocks.some((b) => startTime < b.endTime && endTime > b.startTime);
   }
 
-  /**
-   * Busca el siguiente hueco libre de al menos `duration` minutos a partir de `fromTime`.
-   * Devuelve el startTime del hueco o null si no cabe antes de las 23:59.
-   */
   findNextFreeSlot(date: string, duration: number, fromTime: string): string | null {
     const blocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
     let candidate = fromTime;
 
     for (const b of blocks) {
-      // Si el candidato + duración cabe antes del inicio de este bloque, encontramos hueco
-      const candidateEnd = addMinutesToTime(candidate, duration);
-      if (candidateEnd <= b.startTime) return candidate;
-      // Si el bloque termina después del candidato, saltar al final del bloque + 5 min gap
-      if (b.endTime > candidate) candidate = addMinutesToTime(b.endTime, 5);
+      const endMin = _toMin(candidate) + duration;
+      const bStartMin = _toMin(b.startTime);
+      if (endMin <= bStartMin) return candidate;
+      const bEndMin = _toMin(b.endTime);
+      if (bEndMin > _toMin(candidate)) candidate = addMinutesToTime(b.endTime, 5);
     }
 
-    // Verificar si cabe después de todos los bloques
-    const finalEnd = addMinutesToTime(candidate, duration);
-    if (finalEnd <= '23:59') return candidate;
+    if (_toMin(candidate) + duration <= 24 * 60) return candidate;
     return null;
   }
 
-  /**
-   * Auto-genera bloques para tareas sin bloque asignado en la fecha dada.
-   * Devuelve los bloques creados.
-   */
   generateBlocksFromTasks(date: string): Block[] {
     const tasks = this.getTasksForDayWithCarryOver(date);
     const existingBlocks = this.getBlocks(date);
     const tasksWithBlocks = new Set(
-      existingBlocks.filter(b => b.taskId).map(b => b.taskId!)
+      existingBlocks.filter((b) => b.taskId).map((b) => b.taskId!)
     );
     const unassigned = tasks.filter(
-      t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada'
+      (t) => !tasksWithBlocks.has(t.id) && t.status !== 'terminada'
     );
 
     if (unassigned.length === 0) return [];
@@ -877,16 +1225,19 @@ class Store {
     const newBlocks: Block[] = [];
 
     for (const task of unassigned) {
-      const duration = task.difficulty === 'high' ? 90
-        : task.difficulty === 'medium' ? 60 : 45;
+      const duration =
+        task.difficulty === 'high' ? 90 : task.difficulty === 'medium' ? 60 : 45;
 
       const startTime = this.findNextFreeSlot(date, duration, this.settings.arrivalTime);
-      if (!startTime) continue; // no hay hueco disponible
+      if (!startTime) continue;
 
       const endTime = addMinutesToTime(startTime, duration);
-      const priority = task.isDeliverable || task.difficulty === 'high'
-        ? 'high'
-        : task.difficulty === 'medium' ? 'medium' : 'low';
+      const priority =
+        task.isDeliverable || task.difficulty === 'high'
+          ? 'high'
+          : task.difficulty === 'medium'
+            ? 'medium'
+            : 'low';
 
       const block: Block = {
         id: generateUUID(),
@@ -908,36 +1259,27 @@ class Store {
     return newBlocks;
   }
 
-  /**
-   * Genera la rutina diaria desde la plantilla adecuada según el día de la semana.
-   * Usa el perfil aprendido para:
-   *  - Asignar tareas difíciles a los bloques de mayor productividad
-   *  - Ajustar duraciones según historial
-   */
   generateFromTemplate(date: string): Block[] {
     const existing = this.getBlocks(date);
     if (existing.length > 0) return [];
 
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
-    const template = getTemplateForDay(dayOfWeek, this.settings);
+    const template = getTemplateForDay(dayOfWeek, this.settings, this.workoutLogs, date);
 
     const tasks = this.getTasksForDayWithCarryOver(date);
     const newBlocks: Block[] = [];
 
-    // Primero crear todos los bloques sin tareas
     const blockSlots: Array<{ index: number; type: BlockType; startTime: string }> = [];
 
     for (let i = 0; i < template.length; i++) {
       const tmpl = template[i];
       let duration = durationBetween(tmpl.startTime, tmpl.endTime);
 
-      // Si hay perfil y datos suficientes, ajustar duración de bloques deep/light
       if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
         if (tmpl.type === 'deep') {
           const optimal = getOptimalDuration(this.profile, 'deep');
-          // Solo ajustar si la diferencia es significativa (±15 min)
           if (Math.abs(optimal - duration) > 15) {
-            duration = Math.max(20, Math.min(optimal, 120)); // entre 20 y 120 min
+            duration = Math.max(20, Math.min(optimal, 120));
           }
         } else if (tmpl.type === 'light') {
           const optimal = getOptimalDuration(this.profile, 'light');
@@ -963,23 +1305,19 @@ class Store {
       };
       newBlocks.push(block);
 
-      // Registrar slots donde se puede asignar tarea (solo deep/light)
       if (tmpl.type !== 'rest' && tmpl.type !== 'exercise') {
         blockSlots.push({ index: i, type: tmpl.type, startTime: tmpl.startTime });
       }
     }
 
-    // Asignar tareas a bloques usando el perfil aprendido
     if (tasks.length > 0 && blockSlots.length > 0) {
       if (this.profile && this.profile.totalBlocksAnalyzed >= 10) {
-        // Asignación inteligente: tareas difíciles → franjas más productivas
         const assignment = smartAssignTasksToSlots(tasks, blockSlots, this.profile);
         for (const [blockIdx, task] of assignment) {
           newBlocks[blockIdx].taskId = task.id;
           newBlocks[blockIdx].task = task;
         }
       } else {
-        // Sin suficiente historial: asignar en orden de urgencia
         const taskQueue = [...tasks];
         for (const slot of blockSlots) {
           if (taskQueue.length === 0) break;
@@ -990,7 +1328,6 @@ class Store {
       }
     }
 
-    // Guardar todos los bloques
     for (const block of newBlocks) {
       this.addBlock(block);
     }
@@ -998,27 +1335,10 @@ class Store {
     return newBlocks;
   }
 
-  /**
-   * Reorganiza los bloques de un día para eliminar solapamientos.
-   * Lógica:
-   *  1. Los bloques completados/activos se fijan en su posición.
-   *  2. Los bloques pendientes mantienen su orden cronológico.
-   *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
-   *  4. Los rest/low que no caben se eliminan.
-   */
-  /**
-   * Reorganiza los bloques de un día para eliminar solapamientos.
-   * Lógica:
-   *  1. Los bloques completados/activos y los bloques fijos de rutina se fijan en su posición.
-   *  2. Los bloques pendientes mantienen su orden cronológico.
-   *  3. Si un bloque se solapa con uno anterior o fijo, se desplaza hacia adelante (cascada).
-   *  4. Los rest/low que no caben se eliminan.
-   */
   reorganizeBlocks(date: string, anchorId?: string): void {
     const dayBlocks = this.getBlocks(date);
     if (dayBlocks.length <= 1) return;
 
-    // Labels que no se mueven (bloques de horario fijo)
     const fixedLabels = [
       'sena',
       'actividades formales',
@@ -1029,6 +1349,7 @@ class Store {
       'prepararse para el sena',
       'preparación para el sena',
       'preparación y transporte',
+      'almuerzo en pausa del sena',
     ];
     const isFixed = (b: Block) =>
       b.status === 'completed' ||
@@ -1039,10 +1360,8 @@ class Store {
     const fixed = dayBlocks.filter(isFixed);
     const movable = dayBlocks.filter((b) => !isFixed(b));
 
-    // Ordenar movibles por startTime
     movable.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
-    // Crear slots ocupados por bloques fijos
     const occupied: Array<{ start: string; end: string }> = fixed.map((b) => ({
       start: b.startTime,
       end: b.endTime,
@@ -1055,21 +1374,20 @@ class Store {
     for (const block of movable) {
       let candidate = block.startTime;
 
-      // Resolver solapamientos con bloques ya ubicados (fijos y movibles previos)
       let changed = true;
       while (changed) {
         changed = false;
         for (const occ of occupied) {
           const candidateEnd = addMinutesToTime(candidate, block.duration);
           if (candidate < occ.end && candidateEnd > occ.start) {
-            candidate = occ.end; // pegar justo al final del bloque que solapaba
+            candidate = occ.end;
             changed = true;
           }
         }
       }
 
-      const newEnd = addMinutesToTime(candidate, block.duration);
-      if (newEnd > '23:59') {
+      const candidateEndMin = _toMin(candidate) + block.duration;
+      if (candidateEndMin > 24 * 60) {
         if (block.type === 'rest' && block.priority === 'low') {
           idsToRemove.add(block.id);
           continue;
@@ -1080,6 +1398,9 @@ class Store {
         continue;
       }
 
+      const newEnd =
+        candidateEndMin === 24 * 60 ? '23:59' : addMinutesToTime(candidate, block.duration);
+
       block.startTime = candidate;
       block.endTime = newEnd;
       occupied.push({ start: candidate, end: newEnd });
@@ -1087,13 +1408,18 @@ class Store {
       placed.push(block);
     }
 
-    // Aplicar cambios
     const placedIds = new Set(placed.map((b) => b.id));
     this.blocks = this.blocks.filter((b) => b.date !== date || placedIds.has(b.id));
     for (const p of placed) {
       this.blocks = this.blocks.map((b) =>
         b.id === p.id
-          ? { ...b, startTime: p.startTime, endTime: p.endTime, duration: p.duration, _v: Date.now() }
+          ? {
+              ...b,
+              startTime: p.startTime,
+              endTime: p.endTime,
+              duration: p.duration,
+              _v: Date.now(),
+            }
           : b
       );
     }
@@ -1101,13 +1427,6 @@ class Store {
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
   }
 
-  /**
-   * Reorganiza los bloques de un día de forma elástica e inteligente:
-   *  1. Sincroniza bloques fijos (SENA, transporte, preparación) con la configuración de horarios actual.
-   *  2. Si es el día de hoy, desplaza bloques que debían haber empezado antes respetando la hora actual.
-   *  3. Resuelve solapamientos y compacta los bloques sin solapar ninguna franja bloqueada.
-   *  4. Reasigna tareas reales pendientes a bloques disponibles.
-   */
   reorganizeFromNow(date: string): number {
     const s = this.settings;
     const dayOfWeek = new Date(date + 'T12:00:00').getDay();
@@ -1119,22 +1438,17 @@ class Store {
 
     let modifiedCount = 0;
 
-    // 1. Sincronizar bloques fijos si cambiaron los ajustes (SENA, transporte, etc.)
     if (!isWeekend) {
       const formalStart = _toMin(s.scheduleStartTime);
       const formalEnd = _toMin(s.scheduleEndTime);
       const arrival = _toMin(s.arrivalTime);
-
-      const transportDur = 45;
-      const prepDur = 30;
+      const transportDur = s.transportToSenaMinutes ?? 25;
       const transportStart = formalStart - transportDur;
-      const prepStart = transportStart - prepDur;
 
       for (const b of dayBlocks) {
         if (b.status === 'completed' || b.status === 'failed') continue;
         const label = (b.label ?? '').toLowerCase();
 
-        // Bloque SENA
         if (label === 'sena' || label.includes('actividades formales')) {
           if (b.startTime !== s.scheduleStartTime || b.endTime !== s.scheduleEndTime) {
             b.startTime = s.scheduleStartTime;
@@ -1142,9 +1456,10 @@ class Store {
             b.duration = Math.max(15, formalEnd - formalStart);
             modifiedCount++;
           }
-        }
-        // Bloque de Transporte al SENA
-        else if (label.includes('transporte al sena') || label.includes('transporte hacia el sena')) {
+        } else if (
+          label.includes('transporte al sena') ||
+          label.includes('transporte hacia el sena')
+        ) {
           const targetStart = _toTime(transportStart);
           const targetEnd = s.scheduleStartTime;
           if (b.startTime !== targetStart || b.endTime !== targetEnd) {
@@ -1153,23 +1468,7 @@ class Store {
             b.duration = transportDur;
             modifiedCount++;
           }
-        }
-        // Bloque de Preparación para el SENA
-        else if (
-          (label.includes('preparar') || label.includes('vestirse')) &&
-          (label.includes('sena') || label.includes('formal'))
-        ) {
-          const targetStart = _toTime(prepStart);
-          const targetEnd = _toTime(transportStart);
-          if (b.startTime !== targetStart || b.endTime !== targetEnd) {
-            b.startTime = targetStart;
-            b.endTime = targetEnd;
-            b.duration = prepDur;
-            modifiedCount++;
-          }
-        }
-        // Bloque de Transporte de regreso
-        else if (label.includes('transporte de regreso')) {
+        } else if (label.includes('transporte de regreso')) {
           if (b.startTime !== s.scheduleEndTime || b.endTime !== s.arrivalTime) {
             b.startTime = s.scheduleEndTime;
             b.endTime = s.arrivalTime;
@@ -1180,24 +1479,21 @@ class Store {
       }
     }
 
-    // 2. Si es hoy, desplazar bloques pendientes que estén en el pasado respecto a la hora actual
     const now = new Date();
-    const currentMinutes = isToday ? now.getHours() * 60 + now.getMinutes() : _toMin(s.wakeTime);
+    const currentMinutes = isToday
+      ? now.getHours() * 60 + now.getMinutes()
+      : _toMin(s.wakeTime);
     let cursor = Math.ceil((currentMinutes + 2) / 5) * 5;
 
-    // Ordenar bloques por hora de inicio
     dayBlocks.sort((a, b) => a.startTime.localeCompare(b.startTime));
 
     for (const b of dayBlocks) {
       const label = (b.label ?? '').toLowerCase();
-      // Ignorar bloques ya terminados o fijos
       if (
         b.status === 'completed' ||
         b.status === 'failed' ||
         label.includes('sena') ||
-        label.includes('transporte') ||
-        label.includes('vestirse') ||
-        label.includes('preparar')
+        label.includes('transporte')
       ) {
         const endMin = _toMin(b.endTime);
         if (endMin > cursor) cursor = endMin;
@@ -1226,7 +1522,6 @@ class Store {
       }
     }
 
-    // 3. Ejecutar resolución de solapamientos en cascada
     this.reorganizeBlocks(date);
     this.assignUnblockedTasks(date);
 
@@ -1243,29 +1538,34 @@ class Store {
   // ─── Blocks ────────────────────────────────────────────────────────────────
 
   getBlocks(date?: string): Block[] {
-    if (date) return this.blocks.filter(b => b.date === date);
+    if (date) return this.blocks.filter((b) => b.date === date);
     return this.blocks;
   }
 
   getBlock(id: string): Block | undefined {
-    return this.blocks.find(b => b.id === id);
+    return this.blocks.find((b) => b.id === id);
   }
 
   addBlock(block: Block): void {
     this.blocks = [...this.blocks, { ...block, _v: Date.now() } as Block];
 
-    // Auto-asignar tarea solo a bloques de estudio (deep/light) que no sean rutinas
-    if (block.type !== 'rest' && block.type !== 'exercise' && !block.taskId && !isRoutineLabel(block.label ?? '')) {
-      const dayBlocks = this.blocks.filter(b => b.date === block.date);
+    if (
+      block.type !== 'rest' &&
+      block.type !== 'exercise' &&
+      !block.taskId &&
+      !isRoutineLabel(block.label ?? '')
+    ) {
+      const dayBlocks = this.blocks.filter((b) => b.date === block.date);
       const tasksWithBlocks = new Set(
-        dayBlocks.filter(b => b.taskId).map(b => b.taskId!)
+        dayBlocks.filter((b) => b.taskId).map((b) => b.taskId!)
       );
-      const available = this.getTasksForDayWithCarryOver(block.date)
-        .filter(t => !tasksWithBlocks.has(t.id) && t.status !== 'terminada');
+      const available = this.getTasksForDayWithCarryOver(block.date).filter(
+        (t) => !tasksWithBlocks.has(t.id) && t.status !== 'terminada'
+      );
 
       if (available.length > 0) {
-        const task = available[0]; // ya ordenadas por urgencia
-        this.blocks = this.blocks.map(b =>
+        const task = available[0];
+        this.blocks = this.blocks.map((b) =>
           b.id === block.id ? { ...b, taskId: task.id, task, _v: Date.now() } : b
         );
       }
@@ -1276,19 +1576,30 @@ class Store {
 
   updateBlock(id: string, updates: Partial<Block>): void {
     this.batch(() => {
-      this.blocks = this.blocks.map(b => b.id === id ? { ...b, ...updates, _v: Date.now() } : b);
+      this.blocks = this.blocks.map((b) =>
+        b.id === id ? { ...b, ...updates, _v: Date.now() } : b
+      );
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
 
-      const block = this.blocks.find(b => b.id === id);
+      const block = this.blocks.find((b) => b.id === id);
       if (block) {
+        // Si se completó el bloque de ejercicio, marcar workoutLog del día como completado
+        if (block.type === 'exercise' && updates.status === 'completed') {
+          const wLog = this.getWorkoutLog(block.date);
+          if (!wLog.completed) {
+            this.saveWorkoutLog(block.date, { ...wLog, completed: true });
+          }
+        }
         this.recalcDailyMetrics(block.date);
-        // Reorganizar si se editaron horarios
-        if (updates.startTime !== undefined || updates.endTime !== undefined || updates.duration !== undefined) {
+        if (
+          updates.startTime !== undefined ||
+          updates.endTime !== undefined ||
+          updates.duration !== undefined
+        ) {
           this.reorganizeBlocks(block.date, id);
         }
       }
 
-      // Refrescar perfil cuando un bloque se completa o falla
       if (updates.status === 'completed' || updates.status === 'failed') {
         this.refreshProfile();
       }
@@ -1298,8 +1609,8 @@ class Store {
   deleteBlock(id: string): void {
     this.batch(() => {
       cloudSync.trackDeletion('blocks', id);
-      const block = this.blocks.find(b => b.id === id);
-      this.blocks = this.blocks.filter(b => b.id !== id);
+      const block = this.blocks.find((b) => b.id === id);
+      this.blocks = this.blocks.filter((b) => b.id !== id);
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
       if (block?.date) {
         this.recalcDailyMetrics(block.date);
@@ -1309,23 +1620,29 @@ class Store {
   }
 
   deleteAllBlocksForDate(date: string): void {
-    const blocksToDelete = this.blocks.filter(b => b.date === date);
-    cloudSync.trackDeletions('blocks', blocksToDelete.map(b => b.id));
-    this.blocks = this.blocks.filter(b => b.date !== date);
+    const blocksToDelete = this.blocks.filter((b) => b.date === date);
+    cloudSync.trackDeletions(
+      'blocks',
+      blocksToDelete.map((b) => b.id)
+    );
+    this.blocks = this.blocks.filter((b) => b.date !== date);
     saveToStorage(STORAGE_KEYS.blocks, this.blocks);
     this.recalcDailyMetrics(date);
   }
 
   deleteAllTasks(): void {
     this.batch(() => {
-      cloudSync.trackDeletions('tasks', this.tasks.map(t => t.id));
+      cloudSync.trackDeletions(
+        'tasks',
+        this.tasks.map((t) => t.id)
+      );
       const affectedDates = new Set(
-        this.blocks.filter(b => b.taskId).map(b => b.date)
+        this.blocks.filter((b) => b.taskId).map((b) => b.date)
       );
 
       this.tasks = [];
       saveToStorage(STORAGE_KEYS.tasks, this.tasks);
-      this.blocks = this.blocks.map(b =>
+      this.blocks = this.blocks.map((b) =>
         b.taskId ? { ...b, taskId: undefined, task: undefined, _v: Date.now() } : b
       );
       saveToStorage(STORAGE_KEYS.blocks, this.blocks);
@@ -1340,35 +1657,52 @@ class Store {
 
   getMetrics(startDate?: string, endDate?: string): DailyMetrics[] {
     if (startDate && endDate) {
-      return this.metrics.filter(m => m.date >= startDate && m.date <= endDate);
+      return this.metrics.filter((m) => m.date >= startDate && m.date <= endDate);
     }
     return this.metrics;
   }
 
   getMetricsForDate(date: string): DailyMetrics | null {
-    return this.metrics.find(m => m.date === date) ?? null;
+    return this.metrics.find((m) => m.date === date) ?? null;
   }
 
   recalcDailyMetrics(date: string): void {
     if (!date) return;
     const blocks = this.getBlocks(date);
     const blocksPlanned = blocks.length;
-    const blocksCompleted = blocks.filter(b => b.status === 'completed').length;
-    const blocksFailed = blocks.filter(b => b.status === 'failed').length;
+    const blocksCompleted = blocks.filter((b) => b.status === 'completed').length;
+    const blocksFailed = blocks.filter((b) => b.status === 'failed').length;
     const interruptions = blocks.reduce((sum, b) => sum + (b.interruptions ?? 0), 0);
     const deepWorkHours = blocks
-      .filter(b => b.type === 'deep' && b.status === 'completed')
+      .filter((b) => b.type === 'deep' && b.status === 'completed')
       .reduce((sum, b) => sum + b.duration / 60, 0);
     const disciplineScore = this.calculateDailyScore(date);
 
+    const hLog = this.healthLogs.find((h) => h.date === date);
+    const wLog = this.workoutLogs.find((w) => w.date === date);
+    const mealsCompletedCount = hLog
+      ? Object.values(hLog.mealsCompleted ?? {}).filter(Boolean).length
+      : undefined;
+
     const metric: DailyMetrics = {
-      date, blocksPlanned, blocksCompleted, blocksFailed,
-      interruptions, deepWorkHours, disciplineScore,
+      date,
+      blocksPlanned,
+      blocksCompleted,
+      blocksFailed,
+      interruptions,
+      deepWorkHours,
+      disciplineScore,
+      energyLevel: hLog?.energyLevel,
+      weightKg: hLog?.weightKg,
+      waterMl: hLog?.waterMl,
+      mealsCompletedCount,
+      workoutSplit: wLog?.splitType,
+      workoutCompleted: wLog?.completed,
     };
 
-    const index = this.metrics.findIndex(m => m.date === date);
+    const index = this.metrics.findIndex((m) => m.date === date);
     if (index !== -1) {
-      this.metrics = this.metrics.map(m => m.date === date ? metric : m);
+      this.metrics = this.metrics.map((m) => (m.date === date ? metric : m));
     } else {
       this.metrics = [...this.metrics, metric];
     }
@@ -1385,20 +1719,23 @@ class Store {
   }
 
   updateSettings(updates: Partial<UserSettings>): void {
-    // Migrar geminiApiKey legacy → aiApiKey
-    if (updates.geminiApiKey && !updates.aiApiKey) {
+    const currentProvider = updates.aiProvider ?? this.settings.aiProvider ?? 'groq';
+    if (updates.groqApiKey !== undefined && currentProvider === 'groq') {
+      updates.aiApiKey = updates.groqApiKey;
+    } else if (updates.geminiApiKey !== undefined && currentProvider === 'gemini') {
       updates.aiApiKey = updates.geminiApiKey;
-      updates.aiProvider = updates.aiProvider ?? 'gemini';
-      delete updates.geminiApiKey;
     }
+
     this.settings = { ...this.settings, ...updates };
-    // Guardar en localStorage
     localStorage.setItem(STORAGE_KEYS.settings, JSON.stringify(this.settings));
-    // Subir inmediatamente a la nube (sin debounce) para evitar pérdida al refrescar
     cloudSync.uploadImmediate('settings', this.settings);
-    // Notificar a suscriptores (Home.appName, etc.)
     this.scheduleNotify();
-    if (updates.aiApiKey !== undefined || updates.aiProvider !== undefined) {
+    if (
+      updates.aiApiKey !== undefined ||
+      updates.geminiApiKey !== undefined ||
+      updates.groqApiKey !== undefined ||
+      updates.aiProvider !== undefined
+    ) {
       resetAIClient();
     }
   }
@@ -1417,34 +1754,42 @@ class Store {
 
   getCurrentBlock(): Block | null {
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(
+      now.getMinutes()
+    ).padStart(2, '0')}`;
     const today = dateToStr(now);
-    return this.getBlocks(today).find(b =>
-      b.startTime <= currentTime && b.endTime > currentTime &&
-      b.status !== 'completed' && b.status !== 'failed'
-    ) ?? null;
+    return (
+      this.getBlocks(today).find(
+        (b) =>
+          b.startTime <= currentTime &&
+          b.endTime > currentTime &&
+          b.status !== 'completed' &&
+          b.status !== 'failed'
+      ) ?? null
+    );
   }
 
   getNextBlock(): Block | null {
     const now = new Date();
-    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(
+      now.getMinutes()
+    ).padStart(2, '0')}`;
     const today = dateToStr(now);
     const sorted = this.getBlocks(today).sort((a, b) => a.startTime.localeCompare(b.startTime));
-    return sorted.find(b => b.startTime > currentTime && b.status === 'pending') ?? null;
+    return sorted.find((b) => b.startTime > currentTime && b.status === 'pending') ?? null;
   }
 
   calculateDailyScore(date: string): number {
     const blocks = this.getBlocks(date);
-    const workBlocks = blocks.filter(b => b.type !== 'rest');
+    const workBlocks = blocks.filter((b) => b.type !== 'rest');
     if (workBlocks.length === 0) return 100;
 
     let score = 100;
     const today = todayStr();
-    workBlocks.forEach(block => {
+    workBlocks.forEach((block) => {
       if (block.status === 'failed') {
         score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
       } else if (block.status === 'pending' && date < today) {
-        // Bloque pendiente de un día pasado que quedó abandonado
         score -= block.type === 'deep' ? 20 : block.type === 'exercise' ? 15 : 10;
       }
       if (block.interruptions > 0) {
@@ -1454,37 +1799,21 @@ class Store {
     return Math.max(0, score);
   }
 
-  /**
-   * Elimina bloques pendientes del día actual cuya hora de finalización ya pasó hace más de 10 minutos
-   * y limpia bloques pendientes abandonados de días anteriores.
-   *
-   * IMPORTANTE: NUNCA elimina bloques en estado 'completed' o 'failed' para preservar el historial,
-   * alimentar las métricas a largo plazo y mantener el perfil de aprendizaje.
-   *
-   * Devuelve la cantidad de bloques eliminados.
-   */
   cleanExpiredBlocks(): number {
     const now = new Date();
     const today = dateToStr(now);
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const grace = 10; // minutos de gracia después de endTime
+    const grace = 10;
 
     const before = this.blocks.length;
-    this.blocks = this.blocks.filter(b => {
-      // 1. Bloques completados o fallados: conservar SIEMPRE (historial, métricas y aprendizaje)
+    this.blocks = this.blocks.filter((b) => {
       if (b.status === 'completed' || b.status === 'failed') return true;
-
-      // 2. Bloques futuros (días posteriores): conservar siempre
       if (b.date > today) return true;
-
-      // 3. Bloques de hoy: si sigue pendiente o activo pero su hora de fin ya pasó hace >10 min, descartar
       if (b.date === today) {
         const [eh, em] = b.endTime.split(':').map(Number);
         const endMinutes = eh * 60 + em;
         return currentMinutes < endMinutes + grace;
       }
-
-      // 4. Bloques pendientes de días anteriores que nunca se completaron: descartar
       return false;
     });
 
@@ -1497,24 +1826,30 @@ class Store {
 
   // ─── AI Integration ───────────────────────────────────────────────────────
 
-  /** Verifica si la IA está configurada */
   isAIEnabled(): boolean {
-    const key = this.settings.aiApiKey ?? this.settings.geminiApiKey;
-    return !!key && key.trim().length > 10;
+    const { apiKey } = this.getAIConfig();
+    return !!apiKey && apiKey.trim().length > 10;
   }
 
-  /** Obtiene el proveedor y key activos */
   private getAIConfig(): { provider: AIProvider; apiKey: string } {
-    const key = this.settings.aiApiKey ?? this.settings.geminiApiKey ?? '';
     const provider = this.settings.aiProvider ?? 'groq';
-    return { provider, apiKey: key };
+    let apiKey = '';
+    if (provider === 'groq') {
+      apiKey =
+        this.settings.groqApiKey ||
+        (this.settings.aiProvider === 'groq' ? this.settings.aiApiKey : '') ||
+        (!this.settings.aiApiKey?.startsWith('AIza') ? this.settings.aiApiKey : '') ||
+        '';
+    } else {
+      apiKey =
+        this.settings.geminiApiKey ||
+        (this.settings.aiProvider === 'gemini' ? this.settings.aiApiKey : '') ||
+        (!this.settings.aiApiKey?.startsWith('gsk_') ? this.settings.aiApiKey : '') ||
+        '';
+    }
+    return { provider, apiKey: apiKey.trim() };
   }
 
-  /**
-   * Genera un horario usando Gemini AI.
-   * Envía todo el contexto (settings, perfil, tareas, métricas) a la IA
-   * para que genere un horario personalizado.
-   */
   async generateWithAI(date: string): Promise<{ blocks: Block[]; insights: string[] }> {
     if (!this.isAIEnabled()) {
       throw new Error('API key de IA no configurada. Ve a Configuración > IA.');
@@ -1539,41 +1874,43 @@ class Store {
       this.getSettings(),
       this.profile,
       recentMetrics,
-      existing,
+      existing
     );
 
-    // Crear bloques reales a partir de la respuesta de la IA
-    const taskMap = new Map(tasks.map(t => [t.id, t]));
+    const taskMap = new Map(tasks.map((t) => [t.id, t]));
     const newBlocks: Block[] = [];
     const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
-    const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+    const toMin = (t: string) => {
+      const [h, m] = t.split(':').map(Number);
+      return h * 60 + m;
+    };
     const formalStartMin = toMin(this.settings.scheduleStartTime);
     const formalEndMin = toMin(this.settings.scheduleEndTime);
     const arrivalMin = toMin(this.settings.arrivalTime);
+    const senaLunchMin = toMin(this.settings.mealTimes?.senaLunch || '14:00');
 
     for (const aiBlock of result.blocks) {
       const [sh, sm] = aiBlock.startTime.split(':').map(Number);
       const [eh, em] = aiBlock.endTime.split(':').map(Number);
-      const duration = (eh * 60 + em) - (sh * 60 + sm);
+      const duration = eh * 60 + em - (sh * 60 + sm);
 
       if (duration <= 0) continue;
 
-      // Entre semana: descartar cualquier bloque que la IA coloque
-      // dentro del rango formal o transporte (se inyectan fijos abajo)
       if (isWeekday) {
         const bStart = sh * 60 + sm;
         const bEnd = eh * 60 + em;
         const labelLower = (aiBlock.label ?? '').toLowerCase();
-        const isFormalOrTransport = labelLower.includes('sena') || labelLower.includes('formal')
-          || labelLower.includes('transporte');
-        // Descartar si se solapa con el rango formal+transporte
+        const isFormalOrTransport =
+          labelLower.includes('sena') ||
+          labelLower.includes('formal') ||
+          labelLower.includes('transporte');
         if (isFormalOrTransport || (bStart < arrivalMin && bEnd > formalStartMin)) {
           continue;
         }
       }
 
-      // Enlazar solo con tareas REALES verificadas
-      const validTaskId = aiBlock.taskId && taskMap.has(aiBlock.taskId) ? aiBlock.taskId : undefined;
+      const validTaskId =
+        aiBlock.taskId && taskMap.has(aiBlock.taskId) ? aiBlock.taskId : undefined;
       const task = validTaskId ? taskMap.get(validTaskId) : undefined;
 
       const block: Block = {
@@ -1594,22 +1931,65 @@ class Store {
       newBlocks.push(block);
     }
 
-    // Entre semana: inyectar bloque SENA fijo + transporte de regreso
+    // Entre semana: inyectar bloque SENA fijo con pausa de almuerzo a las 2:00 p.m. + transporte de regreso
     if (isWeekday) {
-      const senaBlock: Block = {
-        id: generateUUID(),
-        type: 'rest',
-        label: 'SENA',
-        priority: 'high',
-        duration: formalEndMin - formalStartMin,
-        startTime: this.settings.scheduleStartTime,
-        endTime: this.settings.scheduleEndTime,
-        status: 'pending',
-        date,
-        interruptions: 0,
-      };
-      this.addBlock(senaBlock);
-      newBlocks.push(senaBlock);
+      if (senaLunchMin > formalStartMin + 30 && senaLunchMin + 30 < formalEndMin) {
+        const sena1: Block = {
+          id: generateUUID(),
+          type: 'rest',
+          label: 'SENA (Bloque 1 · Hidratación con termo)',
+          priority: 'high',
+          duration: senaLunchMin - formalStartMin,
+          startTime: this.settings.scheduleStartTime,
+          endTime: _toTime(senaLunchMin),
+          status: 'pending',
+          date,
+          interruptions: 0,
+        };
+        const senaLunch: Block = {
+          id: generateUUID(),
+          type: 'rest',
+          label: 'Almuerzo en pausa del SENA',
+          priority: 'high',
+          duration: 30,
+          startTime: _toTime(senaLunchMin),
+          endTime: _toTime(senaLunchMin + 30),
+          status: 'pending',
+          date,
+          interruptions: 0,
+        };
+        const sena2: Block = {
+          id: generateUUID(),
+          type: 'rest',
+          label: 'SENA (Bloque 2)',
+          priority: 'high',
+          duration: formalEndMin - (senaLunchMin + 30),
+          startTime: _toTime(senaLunchMin + 30),
+          endTime: this.settings.scheduleEndTime,
+          status: 'pending',
+          date,
+          interruptions: 0,
+        };
+        this.addBlock(sena1);
+        this.addBlock(senaLunch);
+        this.addBlock(sena2);
+        newBlocks.push(sena1, senaLunch, sena2);
+      } else {
+        const senaBlock: Block = {
+          id: generateUUID(),
+          type: 'rest',
+          label: 'SENA',
+          priority: 'high',
+          duration: formalEndMin - formalStartMin,
+          startTime: this.settings.scheduleStartTime,
+          endTime: this.settings.scheduleEndTime,
+          status: 'pending',
+          date,
+          interruptions: 0,
+        };
+        this.addBlock(senaBlock);
+        newBlocks.push(senaBlock);
+      }
 
       if (arrivalMin > formalEndMin) {
         const transportBlock: Block = {
@@ -1629,29 +2009,77 @@ class Store {
       }
     }
 
-    // Auto-asignar tareas reales pendientes a cualquier bloque de estudio libre
     this.assignUnblockedTasks(date);
     this.reorganizeBlocks(date);
 
-    const finalBlocks = this.getBlocks(date).sort((a, b) => a.startTime.localeCompare(b.startTime));
+    const finalBlocks = this.getBlocks(date).sort((a, b) =>
+      a.startTime.localeCompare(b.startTime)
+    );
     return { blocks: finalBlocks, insights: result.insights };
+  }
+
+  async generateDailySchedule(
+    date: string,
+    options?: { replaceExisting?: boolean }
+  ): Promise<DailyScheduleResult> {
+    if (options?.replaceExisting) {
+      notificationService.cancelAllNotifications();
+      this.deleteAllBlocksForDate(date);
+    } else if (this.getBlocks(date).length > 0) {
+      throw new Error('Ya existen bloques para este día.');
+    }
+
+    // 1. Si la IA está disponible, intentar con IA
+    if (this.isAIEnabled()) {
+      try {
+        const aiResult = await this.generateWithAI(date);
+        if (notificationService.hasPermission()) {
+          aiResult.blocks.forEach((b) => notificationService.scheduleBlockNotifications(b));
+        }
+        return {
+          blocks: aiResult.blocks,
+          insights: aiResult.insights,
+          modeUsed: 'ai',
+        };
+      } catch (err: unknown) {
+        console.warn('[SmartPlanner] Fallback a plantilla clínica tras error de IA:', err);
+        // Fallback resiliente al motor local
+        const localBlocks = this.generateFromTemplate(date);
+        this.reorganizeBlocks(date);
+        if (notificationService.hasPermission()) {
+          localBlocks.forEach((b) => notificationService.scheduleBlockNotifications(b));
+        }
+        return {
+          blocks: localBlocks,
+          modeUsed: 'auto',
+          notice: 'La IA no estuvo disponible. Se generó tu horario con el protocolo clínico base.',
+        };
+      }
+    }
+
+    // 2. Motor local determinista directo (sin IA o sin clave)
+    const localBlocks = this.generateFromTemplate(date);
+    this.reorganizeBlocks(date);
+    if (notificationService.hasPermission()) {
+      localBlocks.forEach((b) => notificationService.scheduleBlockNotifications(b));
+    }
+
+    return {
+      blocks: localBlocks,
+      modeUsed: 'auto',
+    };
   }
 
   // ─── Learning Profile ──────────────────────────────────────────────────────
 
-  /** Devuelve el perfil de aprendizaje actual */
   getProfile(): LearnedProfile | null {
     return this.profile;
   }
 
-  /**
-   * Recalcula el perfil de aprendizaje desde el historial de bloques y tareas.
-   * Se ejecuta automáticamente al iniciar la app, al recargar datos remotos,
-   * y cuando se completa/falla un bloque.
-   */
   refreshProfile(): void {
-    // Solo recalcular si hay datos suficientes
-    const terminal = this.blocks.filter(b => b.status === 'completed' || b.status === 'failed');
+    const terminal = this.blocks.filter(
+      (b) => b.status === 'completed' || b.status === 'failed'
+    );
     if (terminal.length < 5) {
       this.profile = null;
       return;
@@ -1659,7 +2087,6 @@ class Store {
     this.profile = analyzeHistory(this.blocks, this.tasks);
     saveToStorage(STORAGE_KEYS.profile, this.profile);
   }
-
 }
 
 export const store = new Store();

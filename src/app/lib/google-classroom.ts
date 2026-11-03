@@ -61,17 +61,31 @@ export interface ClassroomTask {
 // ─── API Calls ────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(url: string): Promise<T> {
-  const token = googleAuth.getAccessToken();
+  let token = googleAuth.getAccessToken();
+  if (!token) {
+    const renewed = await googleAuth.tryAutoRenew();
+    if (renewed) token = googleAuth.getAccessToken();
+  }
   if (!token) throw new Error('No autenticado con Google. Por favor conéctate primero.');
 
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
 
   if (res.status === 401) {
-    // Token expirado o revocado
-    googleAuth.signOut();
-    throw new Error('La sesión de Google expiró. Por favor vuelve a conectar tu cuenta.');
+    // Si venció el access_token, intentar renovar silenciosamente 1 vez
+    const renewed = await googleAuth.tryAutoRenew();
+    if (renewed) {
+      const refreshedToken = googleAuth.getAccessToken();
+      if (refreshedToken) {
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${refreshedToken}` },
+        });
+      }
+    }
+    if (res.status === 401) {
+      throw new Error('La sesión de Google expiró. Por favor vuelve a conectar tu cuenta.');
+    }
   }
 
   if (!res.ok) {
@@ -84,13 +98,28 @@ async function apiFetch<T>(url: string): Promise<T> {
 
 /** Fetch que no lanza error en 403 o 404, retorna null */
 async function apiFetchSafe<T>(url: string): Promise<T | null> {
-  const token = googleAuth.getAccessToken();
+  let token = googleAuth.getAccessToken();
+  if (!token) {
+    const renewed = await googleAuth.tryAutoRenew();
+    if (renewed) token = googleAuth.getAccessToken();
+  }
   if (!token) return null;
 
   try {
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
+    if (res.status === 401) {
+      const renewed = await googleAuth.tryAutoRenew();
+      if (renewed) {
+        const refreshedToken = googleAuth.getAccessToken();
+        if (refreshedToken) {
+          res = await fetch(url, {
+            headers: { Authorization: `Bearer ${refreshedToken}` },
+          });
+        }
+      }
+    }
     if (!res.ok) return null;
     return res.json();
   } catch {

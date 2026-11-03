@@ -37,12 +37,28 @@ export interface CalendarEventItem {
 // ─── API Call ─────────────────────────────────────────────────────────────────
 
 async function apiFetch<T>(url: string): Promise<T> {
-  const token = googleAuth.getAccessToken();
+  let token = googleAuth.getAccessToken();
+  if (!token) {
+    const renewed = await googleAuth.tryAutoRenew();
+    if (renewed) token = googleAuth.getAccessToken();
+  }
   if (!token) throw new Error('No autenticado con Google');
 
-  const res = await fetch(url, {
+  let res = await fetch(url, {
     headers: { Authorization: `Bearer ${token}` },
   });
+
+  if (res.status === 401) {
+    const renewed = await googleAuth.tryAutoRenew();
+    if (renewed) {
+      const refreshedToken = googleAuth.getAccessToken();
+      if (refreshedToken) {
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${refreshedToken}` },
+        });
+      }
+    }
+  }
 
   if (!res.ok) {
     const err = await res.text();
@@ -109,9 +125,7 @@ export async function getCalendarEvents(): Promise<CalendarEventItem[]> {
         endTime = endDt.toTimeString().slice(0, 5);
       }
 
-      // Filtrar solo 2026+
-      const year = parseInt(date.split('-')[0]);
-      if (year < 2026) return null;
+      if (!date) return null;
 
       return {
         id: ev.id,

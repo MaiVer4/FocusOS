@@ -5,6 +5,42 @@ export interface CustomNotificationOptions extends NotificationOptions {
   vibrate?: number[];
 }
 
+/** Detecta si un bloque tipo 'rest' es un hito clínico clave (comidas o desconexión de sueño) que SÍ debe notificar */
+function getClinicalRestNotification(block: Block): { title: string; body: string } | null {
+  const label = (block.label ?? '').toLowerCase();
+  if (label.includes('desayuno')) {
+    return {
+      title: '🍳 Desayuno de Volumen Limpio',
+      body: 'Mínimo 3 huevos + carbohidrato (arepa/pan/avena). Cero desayunos en blanco.',
+    };
+  }
+  if (label.includes('post-entreno') || label.includes('pre-sena') || label.includes('merienda')) {
+    return {
+      title: '🥤 Recarga Post-Entreno + Termo SENA',
+      body: 'Toma tu licuado calórico o sándwich proteico y llena tu termo de agua antes de salir al SENA.',
+    };
+  }
+  if (label.includes('almuerzo') && label.includes('sena')) {
+    return {
+      title: '🍛 Pausa de Almuerzo en SENA',
+      body: 'Aprovecha la salida para tu almuerzo completo (granos + arroz + proteína) y recarga tu agua.',
+    };
+  }
+  if (label.includes('cena')) {
+    return {
+      title: '🍽️ Cena Completa + Corte de Agua',
+      body: 'Cena tus aminoácidos nocturnos ahora y corta líquidos abundantes a las 8:30 p.m. para proteger tu fase REM.',
+    };
+  }
+  if (label.includes('desconexión') || label.includes('protocolo de sueño') || label.includes('dormir')) {
+    return {
+      title: '🌙 Protocolo de Sueño y Escoliosis',
+      body: 'Suelta pantallas, pon 1 sola alarma a las 7:00 a.m. lejos de la cama y duerme de lado (almohada entre rodillas) o boca arriba.',
+    };
+  }
+  return null;
+}
+
 class NotificationService {
   private permission: NotificationPermission = 'default';
   private scheduledNotifications = new Map<string, number>();
@@ -71,7 +107,7 @@ class NotificationService {
     const notifOptions: CustomNotificationOptions = {
       icon: '/icon-192.png',
       badge: '/icon-192.png',
-      vibrate: [150], // Pulso suave y amigable
+      vibrate: [150],
       ...options,
     };
 
@@ -95,26 +131,46 @@ class NotificationService {
 
   /**
    * Programa notificaciones esenciales para un bloque:
-   * - CERO notificaciones para bloques de descanso ('rest') como comidas o transporte.
+   * - Para bloques 'rest': solo notifica si es una de las 4 comidas clave o el protocolo de sueño (10:00 p.m.).
    * - 5 minutos antes SOLO para bloques profundos ('deep').
-   * - Al inicio para bloques de trabajo y ejercicio.
-   * - Al finalizar el bloque de enfoque.
+   * - Al inicio para bloques de trabajo, ejercicio y comidas/sueño clave.
+   * - Al finalizar el bloque de enfoque o ejercicio.
    */
   scheduleBlockNotifications(block: Block) {
     this.cancelBlockNotifications(block.id);
 
-    // CERO notificaciones para bloques de descanso, comida, transporte o dormir
-    if (block.type === 'rest') return;
+    const clinicalRest = block.type === 'rest' ? getClinicalRestNotification(block) : null;
+    if (block.type === 'rest' && !clinicalRest) return;
 
     const now = new Date();
     const [startHour, startMinute] = block.startTime.split(':').map(Number);
     const [endHour, endMinute] = block.endTime.split(':').map(Number);
 
-    const startTime = new Date();
-    startTime.setHours(startHour, startMinute, 0, 0);
+    const [year, month, day] = block.date
+      ? block.date.split('-').map(Number)
+      : [now.getFullYear(), now.getMonth() + 1, now.getDate()];
 
-    const endTime = new Date();
-    endTime.setHours(endHour, endMinute, 0, 0);
+    const startTime = new Date(year, month - 1, day, startHour, startMinute, 0, 0);
+    const endTime = new Date(year, month - 1, day, endHour, endMinute, 0, 0);
+    if (endTime <= startTime) {
+      endTime.setDate(endTime.getDate() + 1);
+    }
+
+    // Si es comida o protocolo de sueño, programar notificación puntual al inicio
+    if (clinicalRest) {
+      if (startTime > now) {
+        const timeout = startTime.getTime() - now.getTime();
+        const timerId = window.setTimeout(() => {
+          this.sendNotification(clinicalRest.title, {
+            body: clinicalRest.body,
+            tag: `clinical-${block.id}`,
+            vibrate: [200, 100, 200],
+          });
+        }, timeout);
+        this.scheduledNotifications.set(`${block.id}-start`, timerId);
+      }
+      return;
+    }
 
     // 1. Alerta 5 minutos antes (solo para Trabajo Profundo)
     if (block.type === 'deep') {
@@ -148,11 +204,13 @@ class NotificationService {
   }
 
   private sendBlockWarning(block: Block, minutesBefore: number) {
-    const blockLabel = getBlockLabel(block.type);
+    const blockLabel = block.label || getBlockLabel(block.type);
     this.sendNotification(
       `⏰ ${blockLabel} en ${minutesBefore} min`,
       {
-        body: block.task?.subject ? `Prepárate: ${block.task.subject}` : 'Prepárate para iniciar tu bloque de enfoque',
+        body: block.task?.subject
+          ? `Prepárate: ${block.task.subject} (Postura erguida, hombros atrás)`
+          : 'Alinea tu postura y ten agua a la mano para iniciar tu bloque.',
         tag: `block-warning-${block.id}`,
         vibrate: [150],
       }
@@ -160,10 +218,12 @@ class NotificationService {
   }
 
   private sendBlockStart(block: Block) {
-    const blockLabel = getBlockLabel(block.type);
-    const body = block.task?.subject
-      ? `${block.task.subject} · ${block.duration} min`
-      : `Bloque iniciado · ${block.duration} min`;
+    const blockLabel = block.label || getBlockLabel(block.type);
+    const body = block.type === 'exercise'
+      ? `${blockLabel} · ${block.duration} min (Calidad técnica, tempo 3-1 y control postural)`
+      : block.task?.subject
+        ? `${block.task.subject} · ${block.duration} min`
+        : `Bloque iniciado · ${block.duration} min`;
 
     this.sendNotification(
       `🎯 ${blockLabel}`,
@@ -176,11 +236,14 @@ class NotificationService {
   }
 
   private sendBlockEnd(block: Block) {
-    const blockLabel = getBlockLabel(block.type);
+    const blockLabel = block.label || getBlockLabel(block.type);
+    const body = block.type === 'deep' || block.type === 'light'
+      ? '¡Bloque completado! Ponte de pie 60s, abre el pecho y retrae las escápulas (escoliosis).'
+      : '¡Entrenamiento completado! Hidrátate y prepara tu comida post-entreno.';
     this.sendNotification(
       `✅ ${blockLabel} completado`,
       {
-        body: '¡Buen trabajo! Toma un descanso y prepárate para la siguiente actividad.',
+        body,
         tag: `block-end-${block.id}`,
         vibrate: [150],
       }
@@ -201,12 +264,6 @@ class NotificationService {
     });
   }
 
-  /**
-   * Programa notificaciones para un entregable:
-   * - Solo 2 alertas de alto valor:
-   *   1. 2 horas antes de la entrega (aviso para finalizar)
-   *   2. En la hora exacta de la entrega
-   */
   scheduleDeliverableNotifications(task: Task) {
     this.cancelTaskNotifications(task.id);
 
@@ -219,7 +276,6 @@ class NotificationService {
 
     if (dueDate <= now) return;
 
-    // 1. Alerta 2 horas antes
     const twoHoursBefore = new Date(dueDate.getTime() - 2 * 60 * 60 * 1000);
     if (twoHoursBefore > now) {
       const timeout = twoHoursBefore.getTime() - now.getTime();
@@ -239,7 +295,6 @@ class NotificationService {
       this.scheduledNotifications.set(`task-${task.id}-2h`, timerId);
     }
 
-    // 2. Alerta en la hora exacta de entrega
     const finalTimeout = dueDate.getTime() - now.getTime();
     if (finalTimeout > 0) {
       const timerId = window.setTimeout(() => {

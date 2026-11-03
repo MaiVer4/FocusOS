@@ -38,6 +38,21 @@ export function getBlockLabel(type: BlockType): string {
   }
 }
 
+/**
+ * Remueve horas estáticas redundantes incrustadas en los títulos de los bloques
+ * (ej: "Almuerzo en pausa del SENA (2:00 p.m.)" -> "Almuerzo en pausa del SENA")
+ */
+export function cleanBlockLabel(label: string | undefined): string {
+  if (!label) return '';
+  return label
+    .replace(/\s*\(Activar luz cálida\s*\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?\)/gi, ' (Luz cálida)')
+    .replace(/\s*\(Luz cálida\s*\d{1,2}:\d{2}\s*(?:a\.?m\.?|p\.?m\.?)?\)/gi, ' (Luz cálida)')
+    .replace(/\s*\+\s*Fin de líquidos(?: abundantes)?\s*\([^)]*\)/gi, ' + Corte de líquidos')
+    .replace(/\s*\(\s*\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?\s*\)/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 export function getBlockStatusLabel(status: BlockStatus): string {
   switch (status) {
     case 'pending':   return 'Pendiente';
@@ -153,11 +168,16 @@ export function addMinutesToTime(time: string, minutes: number): string {
 
 /**
  * Returns the duration in minutes between two HH:mm strings.
+ * Handles blocks spanning midnight (e.g. 23:30 to 00:15 returns 45 min).
  */
 export function durationBetween(start: string, end: string): number {
   const [sh, sm] = start.split(':').map(Number);
   const [eh, em] = end.split(':').map(Number);
-  return (eh * 60 + em) - (sh * 60 + sm);
+  let diff = (eh * 60 + em) - (sh * 60 + sm);
+  if (diff < 0) {
+    diff += 1440; // Cruce de medianoche: 24h = 1440 minutos
+  }
+  return diff;
 }
 
 /**
@@ -197,6 +217,8 @@ export const ROUTINE_LABELS = [
   'cena', 'desayuno', 'almuerzo', 'comida', 'transporte',
   'redes sociales', 'relajación', 'preparación', 'dormir',
   'actividades formales', 'sena', 'rutina', 'despertar',
+  'luz solar', 'post-entreno', 'merienda', 'pausa postural',
+  'desconexión', 'ducha', 'protocolo de sueño', 'corte de agua',
 ];
 
 /** Comprueba si un label de bloque corresponde a una rutina */

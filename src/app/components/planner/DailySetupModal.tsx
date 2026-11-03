@@ -8,11 +8,20 @@ export function DailySetupModal({ onGenerate, onClose }: DailySetupModalProps) {
     <div className="fixed inset-0 bg-black/80 flex items-center justify-center p-6 z-50">
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-sm w-full space-y-5">
         <div>
-          <h3 className="text-xl font-bold">Generar Rutina Diaria</h3>
-          <p className="text-zinc-400 text-sm mt-2 leading-relaxed">
-            Se creará tu rutina completa del día: despertar, estudio, SENA/actividades formales, bloques profundos,
-            ejercicio, revisión y descansos. Las tareas pendientes se asignarán automáticamente a los bloques de trabajo.
+          <h3 className="text-xl font-bold text-white">Generar Rutina Diaria Personalizada</h3>
+          <p className="text-zinc-400 text-xs mt-2 leading-relaxed">
+            Se armará tu día adaptado a tu diagnóstico clínico:
           </p>
+          <ul className="text-xs text-zinc-300 space-y-1.5 mt-3 bg-zinc-950/60 p-3 rounded-xl border border-white/5">
+            <li>🌅 <strong>07:00</strong> — 1 alarma · Luz solar + Vaso de agua</li>
+            <li>🍳 <strong>07:30</strong> — Desayuno (Mín. 3 huevos)</li>
+            <li>💪 <strong>09:00</strong> — Calistenia (50 min · Regla 2:1)</li>
+            <li>🥤 <strong>10:30</strong> — Recarga Post-Entreno + Termo SENA</li>
+            <li>🏫 <strong>12:00 – 18:00</strong> — SENA (Pausa almuerzo 14:00)</li>
+            <li>🧠 <strong>18:45</strong> — Bloques Profundos de estudio</li>
+            <li>🍽️ <strong>20:00</strong> — Cena (Corte de agua 20:30)</li>
+            <li>🌙 <strong>22:00</strong> — Desconexión pantallas (Dormir 22:30)</li>
+          </ul>
         </div>
         <button
           type="button"

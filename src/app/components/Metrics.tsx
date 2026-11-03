@@ -1,13 +1,38 @@
 import { useState, useEffect } from 'react';
 import { store } from '../lib/store';
-import { DailyMetrics } from '../lib/types';
-import { dateToStr, scoreColor, scoreBarColor, formatDateDisplay, todayStr } from '../lib/helpers';
-import { TrendingUp, TrendingDown, Minus, Flame, Target, AlertTriangle } from 'lucide-react';
+import { DailyMetrics, DailyHealthLog, DailyWorkoutLog } from '../lib/types';
+import {
+  dateToStr,
+  scoreColor,
+  scoreBarColor,
+  formatDateDisplay,
+  todayStr,
+} from '../lib/helpers';
+import { CLINICAL_PROFILE } from '../lib/personal-protocol';
+import {
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Flame,
+  Target,
+  AlertTriangle,
+  Scale,
+  Zap,
+  Dumbbell,
+  Droplets,
+  Utensils,
+  ShieldCheck,
+  ShieldAlert,
+} from 'lucide-react';
 
 export function Metrics() {
   const [period, setPeriod] = useState<'week' | 'month'>('week');
   const [metrics, setMetrics] = useState<DailyMetrics[]>([]);
+  const [healthLogs, setHealthLogs] = useState<DailyHealthLog[]>([]);
+  const [workoutLogs, setWorkoutLogs] = useState<DailyWorkoutLog[]>([]);
   const [currentStreak, setCurrentStreak] = useState(0);
+
+  const settings = store.getSettings();
 
   useEffect(() => {
     const recalc = () => {
@@ -18,16 +43,17 @@ export function Metrics() {
       const startStr = dateToStr(start);
       const todayString = dateToStr(today);
 
-      // Read already-computed metrics for the date range
       const generated = store.getMetrics(startStr, todayString);
-
       setMetrics(generated);
 
-      // Calcular racha: días CALENDARIOS consecutivos (no solo entradas de array)
-      // que terminen en hoy y tengan score >= 85
+      const allH = store.getAllHealthLogs().filter((h) => h.date >= startStr && h.date <= todayString);
+      setHealthLogs(allH);
+
+      const allW = store.getAllWorkoutLogs().filter((w) => w.date >= startStr && w.date <= todayString);
+      setWorkoutLogs(allW);
+
       let streak = 0;
-      const scoreByDate = new Map(generated.map(m => [m.date, m.disciplineScore]));
-      // Iterar hacia atrás desde hoy
+      const scoreByDate = new Map(generated.map((m) => [m.date, m.disciplineScore]));
       const cursor = new Date(todayString + 'T12:00:00');
       while (true) {
         const dayStr = dateToStr(cursor);
@@ -36,52 +62,80 @@ export function Metrics() {
           streak++;
           cursor.setDate(cursor.getDate() - 1);
         } else {
-          break; // día sin datos o score < 85 → racha rota
+          break;
         }
       }
       setCurrentStreak(streak);
     };
 
     recalc();
-    // Refrescar cuando cloud sync actualiza datos desde otro dispositivo
     const unsubStore = store.subscribe(recalc);
     return () => unsubStore();
   }, [period]);
 
-  const totalBlocks     = metrics.reduce((s, m) => s + m.blocksPlanned, 0);
+  const totalBlocks = metrics.reduce((s, m) => s + m.blocksPlanned, 0);
   const completedBlocks = metrics.reduce((s, m) => s + m.blocksCompleted, 0);
-  const failedBlocks    = metrics.reduce((s, m) => s + m.blocksFailed, 0);
+  const failedBlocks = metrics.reduce((s, m) => s + m.blocksFailed, 0);
   const totalInterruptions = metrics.reduce((s, m) => s + m.interruptions, 0);
-  const totalDeepHours  = metrics.reduce((s, m) => s + m.deepWorkHours, 0);
-  const avgDiscipline   = metrics.length > 0
-    ? Math.round(metrics.reduce((s, m) => s + m.disciplineScore, 0) / metrics.length)
-    : 100;
-  const completionRate  = totalBlocks > 0
-    ? Math.round((completedBlocks / totalBlocks) * 100)
-    : 0;
+  const totalDeepHours = metrics.reduce((s, m) => s + m.deepWorkHours, 0);
+  const avgDiscipline =
+    metrics.length > 0
+      ? Math.round(metrics.reduce((s, m) => s + m.disciplineScore, 0) / metrics.length)
+      : 100;
+  const completionRate =
+    totalBlocks > 0 ? Math.round((completedBlocks / totalBlocks) * 100) : 0;
 
-  // Trend: compare last 3 days vs first 3 days
-  const recentAvg = metrics.length >= 3
-    ? metrics.slice(-3).reduce((s, m) => s + m.disciplineScore, 0) / 3
-    : avgDiscipline;
-  const olderAvg  = metrics.length >= 6
-    ? metrics.slice(0, 3).reduce((s, m) => s + m.disciplineScore, 0) / 3
-    : avgDiscipline;
+  // Trend
+  const recentAvg =
+    metrics.length >= 3
+      ? metrics.slice(-3).reduce((s, m) => s + m.disciplineScore, 0) / 3
+      : avgDiscipline;
+  const olderAvg =
+    metrics.length >= 6
+      ? metrics.slice(0, 3).reduce((s, m) => s + m.disciplineScore, 0) / 3
+      : avgDiscipline;
   const trend = recentAvg > olderAvg + 2 ? 'up' : recentAvg < olderAvg - 2 ? 'down' : 'stable';
 
-  const maxScore = Math.max(...metrics.map(m => m.disciplineScore), 1);
+  // Métricas Clínicas, Posturales y Físicas
+  const currentWeight = settings.currentWeightKg ?? CLINICAL_PROFILE.startingWeightKg;
+  const targetWeight = settings.targetWeightKg ?? 54;
+  const weightGained = (currentWeight - CLINICAL_PROFILE.startingWeightKg).toFixed(1);
+
+  // Energía
+  const energyLogs = healthLogs.filter((h) => typeof h.energyLevel === 'number' && h.energyLevel > 0);
+  const avgEnergy =
+    energyLogs.length > 0
+      ? (energyLogs.reduce((s, h) => s + h.energyLevel!, 0) / energyLogs.length).toFixed(1)
+      : '5.0';
+
+  // Balance Biomecánico 2:1 (Tracción vs. Empuje)
+  const completedWorkouts = workoutLogs.filter((w) => w.completed);
+  const pullCount = completedWorkouts.filter((w) => w.splitType === 'pull').length;
+  const pushCount = completedWorkouts.filter((w) => w.splitType === 'push').length;
+  const legsCount = completedWorkouts.filter((w) => w.splitType === 'legs').length;
+  const ratioMet = pullCount >= pushCount;
+
+  // Adherencia Nutricional
+  const totalWaterLitres = (
+    healthLogs.reduce((s, h) => s + (h.waterMl || 0), 0) / 1000
+  ).toFixed(1);
+  const daysWithAllMeals = healthLogs.filter(
+    (h) => Object.values(h.mealsCompleted ?? {}).filter(Boolean).length >= 4
+  ).length;
+
+  const maxScore = Math.max(...metrics.map((m) => m.disciplineScore), 1);
 
   return (
     <div className="p-6 space-y-5 pb-24">
       {/* Header */}
       <div className="space-y-1">
-        <h1 className="text-3xl font-bold">Métricas</h1>
-        <p className="text-zinc-400 text-sm">Análisis de tu disciplina</p>
+        <h1 className="text-3xl font-bold">Métricas & Diagnóstico</h1>
+        <p className="text-zinc-400 text-sm">Disciplina, progreso muscular y alineación postural</p>
       </div>
 
       {/* Period Selector */}
       <div className="flex gap-2 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
-        {(['week', 'month'] as const).map(p => (
+        {(['week', 'month'] as const).map((p) => (
           <button
             key={p}
             onClick={() => setPeriod(p)}
@@ -89,67 +143,169 @@ export function Metrics() {
               period === p ? 'bg-red-600 text-white' : 'text-zinc-400 hover:text-white'
             }`}
           >
-            {p === 'week' ? 'Semana' : 'Mes'}
+            {p === 'week' ? 'Semana (7 días)' : 'Mes (30 días)'}
           </button>
         ))}
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Discipline */}
-        <div className="bg-gradient-to-br from-red-900/20 to-orange-900/20 border border-red-800/30 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-red-400 mb-2">
-            <Flame className="size-4" />
-            <span className="text-xs uppercase tracking-wider">Disciplina</span>
+      {/* ═══ RESUMEN CLÍNICO & FÍSICO (HIPERTROFIA, ENERGÍA Y ESCOLIOSIS) ═══ */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">
+          Evolución Física y Metabólica
+        </h2>
+        <div className="grid grid-cols-2 gap-3">
+          {/* Peso y Volumen Limpio */}
+          <div className="bg-gradient-to-br from-emerald-950/40 to-zinc-900 border border-emerald-500/30 rounded-2xl p-4 space-y-1">
+            <div className="flex items-center justify-between text-xs text-emerald-400">
+              <span className="flex items-center gap-1 font-bold">
+                <Scale className="size-4" /> Peso Corporal
+              </span>
+              <span className="text-[10px] text-zinc-400">Meta {targetWeight} kg</span>
+            </div>
+            <div className="text-3xl font-black text-white tabular-nums pt-1">
+              {currentWeight} <span className="text-xs font-normal text-zinc-400">kg</span>
+            </div>
+            <div className="text-[11px] text-emerald-300 font-semibold">
+              {Number(weightGained) >= 0 ? `+${weightGained} kg` : `${weightGained} kg`} desde base (47 kg)
+            </div>
           </div>
-          <div className={`text-4xl font-bold ${scoreColor(avgDiscipline)}`}>{avgDiscipline}%</div>
-          <div className="flex items-center gap-1 mt-2 text-xs">
-            {trend === 'up' && <><TrendingUp className="size-3 text-green-500" /><span className="text-green-500">Mejorando</span></>}
-            {trend === 'down' && <><TrendingDown className="size-3 text-red-500" /><span className="text-red-500">Bajando</span></>}
-            {trend === 'stable' && <><Minus className="size-3 text-zinc-400" /><span className="text-zinc-400">Estable</span></>}
+
+          {/* Nivel de Energía Diario */}
+          <div className="bg-gradient-to-br from-amber-950/40 to-zinc-900 border border-amber-500/30 rounded-2xl p-4 space-y-1">
+            <div className="flex items-center justify-between text-xs text-amber-400">
+              <span className="flex items-center gap-1 font-bold">
+                <Zap className="size-4" /> Energía Promedio
+              </span>
+              <span className="text-[10px] text-zinc-400">Meta 8–9 / 10</span>
+            </div>
+            <div className="text-3xl font-black text-white tabular-nums pt-1">
+              {avgEnergy} <span className="text-xs font-normal text-zinc-400">/ 10</span>
+            </div>
+            <div className="text-[11px] text-amber-300 font-semibold">
+              Base clínica: 4–5 / 10
+            </div>
+          </div>
+
+          {/* Balance Biomecánico 2:1 (Escoliosis) */}
+          <div className="col-span-2 bg-gradient-to-br from-teal-950/40 to-zinc-900 border border-teal-500/30 rounded-2xl p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-teal-300 flex items-center gap-1.5">
+                <Dumbbell className="size-4" /> Regla Biomecánica 2:1 (Escoliosis)
+              </span>
+              <span
+                className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                  ratioMet
+                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                    : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                }`}
+              >
+                {ratioMet ? '✓ Hombros Alineados' : '⚠️ Más Espalda Requerida'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+              <div className="bg-zinc-900/80 rounded-xl p-2 border border-white/5">
+                <div className="text-lg font-black text-teal-300">{pullCount}</div>
+                <div className="text-[10px] text-zinc-400 font-semibold">Tracción / Espalda</div>
+              </div>
+              <div className="bg-zinc-900/80 rounded-xl p-2 border border-white/5">
+                <div className="text-lg font-black text-orange-400">{pushCount}</div>
+                <div className="text-[10px] text-zinc-400 font-semibold">Empuje / Pecho</div>
+              </div>
+              <div className="bg-zinc-900/80 rounded-xl p-2 border border-white/5">
+                <div className="text-lg font-black text-sky-400">{legsCount}</div>
+                <div className="text-[10px] text-zinc-400 font-semibold">Piernas / Core</div>
+              </div>
+            </div>
+            <p className="text-[11px] text-zinc-300 leading-relaxed">
+              {ratioMet
+                ? '¡Excelente! Mantienes la tracción por encima o igual al empuje, protegiendo tu columna del acortamiento por las 6h de PC.'
+                : 'Cuidado: Llevas más empuje que tracción. La próxima sesión debe ser Tracción y Corrección de Escoliosis.'}
+            </p>
           </div>
         </div>
+      </div>
 
-        {/* Completion */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-green-400 mb-2">
-            <Target className="size-4" />
-            <span className="text-xs uppercase tracking-wider">Cumplimiento</span>
+      {/* ═══ RESUMEN DE DISCIPLINA Y BLOQUES ═══ */}
+      <div className="space-y-2">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-zinc-400 px-1">
+          Disciplina y Productividad
+        </h2>
+        <div className="grid grid-cols-2 gap-3">
+          {/* Discipline */}
+          <div className="bg-gradient-to-br from-red-900/20 to-orange-900/20 border border-red-800/30 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-red-400 mb-1">
+              <Flame className="size-4" />
+              <span className="text-xs uppercase tracking-wider">Disciplina</span>
+            </div>
+            <div className={`text-3xl font-bold ${scoreColor(avgDiscipline)}`}>{avgDiscipline}%</div>
+            <div className="flex items-center gap-1 mt-1 text-xs">
+              {trend === 'up' && (
+                <>
+                  <TrendingUp className="size-3 text-green-500" />
+                  <span className="text-green-500">Mejorando</span>
+                </>
+              )}
+              {trend === 'down' && (
+                <>
+                  <TrendingDown className="size-3 text-red-500" />
+                  <span className="text-red-500">Bajando</span>
+                </>
+              )}
+              {trend === 'stable' && (
+                <>
+                  <Minus className="size-3 text-zinc-400" />
+                  <span className="text-zinc-400">Estable</span>
+                </>
+              )}
+            </div>
           </div>
-          <div className="text-4xl font-bold">{completionRate}%</div>
-          <div className="text-xs text-zinc-400 mt-2">{completedBlocks}/{totalBlocks} bloques</div>
-        </div>
 
-        {/* Deep Hours */}
-        <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-blue-400 mb-2">
-            <span className="text-xs uppercase tracking-wider">⏱ Horas Profundas</span>
+          {/* Completion */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-green-400 mb-1">
+              <Target className="size-4" />
+              <span className="text-xs uppercase tracking-wider">Cumplimiento</span>
+            </div>
+            <div className="text-3xl font-bold">{completionRate}%</div>
+            <div className="text-xs text-zinc-400 mt-1">
+              {completedBlocks}/{totalBlocks} bloques
+            </div>
           </div>
-          <div className="text-4xl font-bold">{totalDeepHours.toFixed(1)}</div>
-          <div className="text-xs text-zinc-400 mt-2">horas totales</div>
-        </div>
 
-        {/* Streak */}
-        <div className="bg-gradient-to-br from-purple-900/20 to-pink-900/20 border border-purple-800/30 rounded-2xl p-5">
-          <div className="flex items-center gap-2 text-purple-400 mb-2">
-            <Flame className="size-4" />
-            <span className="text-xs uppercase tracking-wider">Racha</span>
+          {/* Deep Hours */}
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-blue-400 mb-1">
+              <span className="text-xs uppercase tracking-wider">⏱ Horas Deep</span>
+            </div>
+            <div className="text-3xl font-bold">{totalDeepHours.toFixed(1)}</div>
+            <div className="text-xs text-zinc-400 mt-1">horas totales</div>
           </div>
-          <div className="text-4xl font-bold">{currentStreak}</div>
-          <div className="text-xs text-zinc-400 mt-2">días consecutivos ≥85%</div>
+
+          {/* Streak */}
+          <div className="bg-gradient-to-br from-purple-900/20 to-pink-900/20 border border-purple-800/30 rounded-2xl p-4">
+            <div className="flex items-center gap-2 text-purple-400 mb-1">
+              <Flame className="size-4" />
+              <span className="text-xs uppercase tracking-wider">Racha</span>
+            </div>
+            <div className="text-3xl font-bold">{currentStreak}</div>
+            <div className="text-xs text-zinc-400 mt-1">días con score ≥85%</div>
+          </div>
         </div>
       </div>
 
       {/* Detailed Stats */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-3">
-        <h3 className="font-semibold">Resumen Detallado</h3>
+        <h3 className="font-semibold text-sm">Resumen Detallado</h3>
         {[
           { label: 'Bloques completados', value: completedBlocks, color: 'text-green-500' },
-          { label: 'Bloques fallados',    value: failedBlocks,    color: 'text-red-500'   },
-          { label: 'Interrupciones',      value: totalInterruptions, color: 'text-orange-500' },
-          { label: 'Días analizados',     value: metrics.length,  color: ''              },
+          { label: 'Bloques fallados', value: failedBlocks, color: 'text-red-500' },
+          { label: 'Interrupciones', value: totalInterruptions, color: 'text-orange-500' },
+          { label: 'Días con 4 comidas completas', value: daysWithAllMeals, color: 'text-amber-400' },
+          { label: 'Agua total consumida', value: `${totalWaterLitres} L`, color: 'text-sky-400' },
+          { label: 'Sesiones de Calistenia', value: completedWorkouts.length, color: 'text-emerald-400' },
+          { label: 'Días analizados', value: metrics.length, color: '' },
         ].map(({ label, value, color }) => (
-          <div key={label} className="flex items-center justify-between text-sm">
+          <div key={label} className="flex items-center justify-between text-xs">
             <span className="text-zinc-400">{label}</span>
             <span className={`font-semibold ${color}`}>{value}</span>
           </div>
@@ -159,7 +315,7 @@ export function Metrics() {
       {/* Bar Chart */}
       {metrics.length > 0 && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5 space-y-3">
-          <h3 className="font-semibold">Historial Visual</h3>
+          <h3 className="font-semibold text-sm">Historial Visual de Disciplina</h3>
           <div className="flex items-end gap-1 h-20">
             {metrics.map((m) => (
               <div key={m.date} className="flex-1 flex flex-col items-center gap-1">
@@ -180,20 +336,36 @@ export function Metrics() {
 
       {/* Daily Breakdown */}
       <div className="space-y-3">
-        <h3 className="font-semibold">Historial Diario</h3>
+        <h3 className="font-semibold text-sm">Historial Diario</h3>
         <div className="space-y-2">
           {[...metrics].reverse().map((m) => {
             const isToday = m.date === todayStr();
+            const h = healthLogs.find((x) => x.date === m.date);
             return (
               <div key={m.date} className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
                 <div className="flex items-center justify-between mb-2">
                   <div>
                     <div className="font-semibold text-sm">
-                      {isToday ? 'Hoy' : formatDateDisplay(m.date, { weekday: 'short', month: 'short', day: 'numeric' })}
+                      {isToday
+                        ? 'Hoy'
+                        : formatDateDisplay(m.date, {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                          })}
                     </div>
-                    <div className="text-xs text-zinc-400 mt-0.5">
-                      {m.blocksCompleted}/{m.blocksPlanned} bloques
-                      {m.interruptions > 0 && ` · ${m.interruptions} interrupción${m.interruptions > 1 ? 'es' : ''}`}
+                    <div className="text-xs text-zinc-400 mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span>{m.blocksCompleted}/{m.blocksPlanned} bloques</span>
+                      {h?.energyLevel && (
+                        <span className="text-amber-400 font-semibold">
+                          ⚡ {h.energyLevel}/10
+                        </span>
+                      )}
+                      {h?.weightKg && (
+                        <span className="text-emerald-400 font-semibold">
+                          ⚖️ {h.weightKg}kg
+                        </span>
+                      )}
                     </div>
                   </div>
                   <div className="text-right">
@@ -225,21 +397,7 @@ export function Metrics() {
             <div>
               <div className="font-semibold text-orange-400">Rendimiento Bajo</div>
               <div className="text-sm text-zinc-400 mt-1">
-                Disciplina promedio por debajo del 70%. Considera ajustar tus horarios o reducir la cantidad de bloques.
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {currentStreak >= 7 && (
-        <div className="bg-gradient-to-br from-purple-900/20 to-pink-900/20 border border-purple-800/30 rounded-2xl p-5">
-          <div className="flex items-start gap-3">
-            <Flame className="size-5 text-purple-400 mt-0.5 flex-shrink-0" />
-            <div>
-              <div className="font-semibold text-purple-400">¡Racha de {currentStreak} Días!</div>
-              <div className="text-sm text-zinc-400 mt-1">
-                Excelente disciplina sostenida. ¡Sigue así!
+                Disciplina promedio por debajo del 70%. Recuerda que cumplir tus 4 comidas y dormir de 10:30 p.m. a 7:00 a.m. es lo que mantendrá tu energía en 8–9/10.
               </div>
             </div>
           </div>
@@ -248,4 +406,3 @@ export function Metrics() {
     </div>
   );
 }
-

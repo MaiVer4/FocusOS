@@ -72,6 +72,7 @@ export async function signInWithGoogleToken(accessToken: string): Promise<User> 
   const credential = GoogleAuthProvider.credential(null, accessToken);
   const result = await signInWithCredential(auth, credential);
   currentUser = result.user; // Establecer inmediatamente, no esperar onAuthStateChanged
+  await ensureSingleOwner(result.user);
   return result.user;
 }
 

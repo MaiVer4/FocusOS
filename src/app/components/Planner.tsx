@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router';
 import { store } from '../lib/store';
 import { notificationService } from '../lib/notifications';
 import { Block, Task, TaskStatus, BlockType, BlockPriority, BlockStatus } from '../lib/types';
 import { ParsedItem } from '../lib/ai-classifier';
+import { formatAIErrorMessage } from '../lib/ai-engine';
 import {
   getBlockColor,
   getBlockLabel,
@@ -17,6 +19,7 @@ import {
   todayStr,
   formatDateDisplay,
   generateUUID,
+  cleanBlockLabel,
 } from '../lib/helpers';
 import {
   Plus,
@@ -49,10 +52,10 @@ import { BlockModal } from './planner/BlockModal';
 import { SmartImportModal } from './planner/SmartImportModal';
 import { ClassroomModal } from './planner/ClassroomModal';
 import { CalendarModal } from './planner/CalendarModal';
-import { DailySetupModal } from './planner/DailySetupModal';
 import { ConfirmModal } from './planner/ConfirmModal';
 
 export function Planner() {
+  const navigate = useNavigate();
   const [selectedDate, setSelectedDate] = useState(todayStr());
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -62,7 +65,6 @@ export function Planner() {
   // Modals state
   const [showAddBlock, setShowAddBlock] = useState(false);
   const [showAddTask, setShowAddTask] = useState(false);
-  const [showDailySetup, setShowDailySetup] = useState(false);
   const [editingBlock, setEditingBlock] = useState<Block | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [showSmartImport, setShowSmartImport] = useState(false);
@@ -71,7 +73,8 @@ export function Planner() {
   const [classroomConnected, setClassroomConnected] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [confirmAction, setConfirmAction] = useState<{ message: string; onConfirm: () => void } | null>(null);
-  const [aiGenerating, setAiGenerating] = useState(false);
+  const [planningLoading, setPlanningLoading] = useState(false);
+  const [plannerNotice, setPlannerNotice] = useState<string | null>(null);
   const [aiInsights, setAiInsights] = useState<string[] | null>(null);
   const [aiError, setAiError] = useState<string | null>(null);
 
@@ -165,39 +168,39 @@ export function Planner() {
     refreshData();
   };
 
-  const handleDailySetup = () => {
-    const templateBlocks = store.generateFromTemplate(selectedDate);
-    if (templateBlocks.length === 0) {
-      store.generateBlocksFromTasks(selectedDate);
-    }
-    store.reorganizeBlocks(selectedDate);
+  const handlePlanDayClick = () => {
+    if (planningLoading) return;
 
-    if (notificationService.hasPermission()) {
-      store.getBlocks(selectedDate).forEach(b => notificationService.scheduleBlockNotifications(b));
+    if (blocks.length > 0) {
+      setConfirmAction({
+        message: `Ya tienes bloques creados para el ${formatDateDisplay(selectedDate)}. ¿Deseas reemplazar el horario actual por una nueva rutina generada?`,
+        onConfirm: () => executePlanDay(true),
+      });
+      return;
     }
 
-    refreshData();
-    setShowDailySetup(false);
+    executePlanDay(false);
   };
 
-  const handleAIGenerate = async () => {
-    if (aiGenerating) return;
-    setAiGenerating(true);
+  const executePlanDay = async (replaceExisting: boolean) => {
+    setPlanningLoading(true);
     setAiInsights(null);
     setAiError(null);
+    setPlannerNotice(null);
+
     try {
-      const result = await store.generateWithAI(selectedDate);
-      if (result.insights.length > 0) {
+      const result = await store.generateDailySchedule(selectedDate, { replaceExisting });
+      if (result.insights && result.insights.length > 0) {
         setAiInsights(result.insights);
+      }
+      if (result.notice) {
+        setPlannerNotice(result.notice);
       }
       refreshData();
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'No se pudo generar el horario con IA.';
-      setAiError(message.includes('JSON') || message.includes('indicó') || message.includes('respondi'))
-        ? 'La IA respondió con un formato inválido. Intenta de nuevo en unos segundos.'
-        : message;
+      setAiError(formatAIErrorMessage(err, store.getSettings().aiProvider));
     } finally {
-      setAiGenerating(false);
+      setPlanningLoading(false);
     }
   };
 
@@ -348,9 +351,10 @@ export function Planner() {
   const postponeBlock = (id: string, minutes: number) => {
     const block = store.getBlock(id);
     if (!block || block.status === 'completed' || block.status === 'failed') return;
+    const [eh, em] = block.endTime.split(':').map(Number);
+    if (eh * 60 + em + minutes > 24 * 60) return;
     const newStart = addMinutesToTime(block.startTime, minutes);
     const newEnd = addMinutesToTime(block.endTime, minutes);
-    if (newEnd > '23:59') return;
 
     const dayBlocks = store.getBlocks(block.date).sort((a, b) => a.startTime.localeCompare(b.startTime));
     const blockIdx = dayBlocks.findIndex(b => b.id === id);
@@ -564,25 +568,17 @@ export function Planner() {
                 </button>
               )}
               <button
-                onClick={() => setShowDailySetup(true)}
-                className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-xs font-semibold transition-colors"
+                onClick={handlePlanDayClick}
+                disabled={planningLoading}
+                className="px-3 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold text-white transition-all shadow-sm flex items-center gap-1.5 active:scale-95"
+                title="Generar rutina diaria inteligente (IA con respaldo clínico automático)"
               >
-                Auto
-              </button>
-              <button
-                onClick={() => {
-                  if (!store.isAIEnabled()) {
-                    setAiError('Configura tu API key de IA en Settings → Inteligencia Artificial');
-                    return;
-                  }
-                  handleAIGenerate();
-                }}
-                disabled={aiGenerating}
-                className="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-700 disabled:text-zinc-500 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1"
-                title={!store.isAIEnabled() ? 'Configura API key en Settings' : blocks.length > 0 ? 'Elimina los bloques primero' : 'Generar horario con IA'}
-              >
-                {aiGenerating ? <Loader2 className="size-3.5 animate-spin" /> : <Brain className="size-3.5" />}
-                IA
+                {planningLoading ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="size-3.5" />
+                )}
+                Planificar Día
               </button>
               {blocks.length > 0 && (
                 <button
@@ -611,9 +607,34 @@ export function Planner() {
             </div>
           </div>
 
+          {plannerNotice && (
+            <div className="bg-amber-950/40 border border-amber-500/30 rounded-xl p-3 text-sm text-amber-200 flex items-start justify-between gap-3">
+              <div className="flex-1 text-xs">
+                <span className="font-semibold text-amber-300">Nota:</span> {plannerNotice}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPlannerNotice(null)}
+                className="text-zinc-400 hover:text-white text-xs px-1"
+                title="Cerrar"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {aiError && (
-            <div className="bg-red-950/40 border border-red-500/30 rounded-xl p-3 text-sm text-red-200">
-              <span className="font-semibold">IA no disponible:</span> {aiError}
+            <div className="bg-red-950/40 border border-red-500/30 rounded-xl p-3 text-sm text-red-200 flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <span className="font-semibold text-red-300">IA no disponible:</span> {aiError}
+              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/settings')}
+                className="shrink-0 px-2.5 py-1 text-xs bg-red-800/60 hover:bg-red-700/80 text-white font-medium border border-red-500/40 rounded-lg transition-colors"
+              >
+                Ajustes IA ⚙️
+              </button>
             </div>
           )}
 
@@ -622,7 +643,7 @@ export function Planner() {
               <CalendarIcon className="size-8 mx-auto opacity-40" />
               <p className="text-sm">Sin bloques para este día</p>
               <p className="text-xs">
-                Toca "Auto" para configuración rápida{store.isAIEnabled() ? ', "IA" para horario inteligente' : ''} o "+" para agregar manualmente
+                Toca "Planificar Día" para armar tu rutina{store.isAIEnabled() ? ' inteligente con IA' : ''} o "+" para agregar manualmente
               </p>
             </div>
           ) : (
@@ -645,7 +666,7 @@ export function Planner() {
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
-                        <span className="font-semibold text-sm">{block.label || getBlockLabel(block.type)}</span>
+                        <span className="font-semibold text-sm">{cleanBlockLabel(block.label) || getBlockLabel(block.type)}</span>
                         {block.status !== 'pending' && (
                           <span className={`text-xs px-2 py-0.5 rounded-full ${
                             block.status === 'completed' ? 'bg-green-600/30 text-green-300' :
@@ -976,13 +997,6 @@ export function Planner() {
 
       {/* ── Modales ── */}
 
-      {showDailySetup && (
-        <DailySetupModal
-          onGenerate={handleDailySetup}
-          onClose={() => setShowDailySetup(false)}
-        />
-      )}
-
       {(showAddTask || editingTask) && (
         <TaskModal
           task={editingTask}
@@ -1042,8 +1056,25 @@ export function Planner() {
 
       {/* AI Error Message */}
       {aiError && (
-        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 bg-red-900 text-red-400 rounded-xl px-4 py-3 text-sm shadow-lg">
-          {aiError}
+        <div className="fixed bottom-4 left-1/2 transform -translate-x-1/2 max-w-md w-[92%] bg-zinc-900 border border-red-500/50 text-red-300 rounded-xl px-4 py-3 text-sm shadow-2xl flex items-center justify-between gap-3 z-50">
+          <span className="line-clamp-2 text-xs flex-1">{aiError}</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => navigate('/settings')}
+              className="text-xs bg-purple-600 hover:bg-purple-700 text-white px-2.5 py-1 rounded-lg font-medium transition-colors"
+            >
+              Ajustes
+            </button>
+            <button
+              type="button"
+              onClick={() => setAiError(null)}
+              className="text-zinc-400 hover:text-white text-xs px-1.5 py-1 rounded"
+              title="Cerrar"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
     </div>
