@@ -1,7 +1,27 @@
 import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
+import fs from 'fs'
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
+
+function pwaVersionPlugin() {
+  return {
+    name: 'pwa-version-updater',
+    closeBundle() {
+      const swPath = path.resolve(__dirname, 'dist/sw.js');
+      if (fs.existsSync(swPath)) {
+        let content = fs.readFileSync(swPath, 'utf-8');
+        const buildId = Date.now().toString(36);
+        content = content.replace(
+          /const CACHE_NAME = ['"][^'"]+['"];/,
+          `const CACHE_NAME = 'focusos-pwa-${buildId}';\n// Build ID: ${buildId} - ${new Date().toISOString()}`
+        );
+        fs.writeFileSync(swPath, content, 'utf-8');
+        console.log(`[PWA] dist/sw.js actualizado con CACHE_NAME = focusos-pwa-${buildId}`);
+      }
+    },
+  };
+}
 
 function googleAuthDevPlugin(env: Record<string, string>) {
   return {
@@ -95,6 +115,7 @@ export default defineConfig(({ mode }) => {
       react(),
       tailwindcss(),
       googleAuthDevPlugin(env),
+      pwaVersionPlugin(),
     ],
     resolve: {
       alias: {
