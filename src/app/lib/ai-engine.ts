@@ -9,7 +9,7 @@
  * Gemini usa el SDK @google/generative-ai.
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from '@google/generative-ai';
 import { Block, BlockType, Task, UserSettings, DailyMetrics, MealId, MealCustomOverride } from './types';
 import { isRoutineLabel, getDayOfWeek } from './helpers';
 import { LearnedProfile } from './learning-engine';
@@ -56,7 +56,13 @@ const FALLBACK_GROQ_MODELS = [
   'llama-3.3-70b-versatile',
   'qwen/qwen3.6-27b',
 ];
-const GEMINI_MODELS = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash'];
+const GEMINI_MODELS = [
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-pro',
+];
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 
 // ─── Utilidades ──────────────────────────────────────────────────────────────
@@ -81,6 +87,14 @@ export function formatAIErrorMessage(error: unknown, provider?: AIProvider): str
     return 'Has ingresado una clave de Gemini (inicia con "AIza") con el proveedor Groq seleccionado. Cámbiate al proveedor Gemini en Ajustes o ingresa una clave de Groq (gsk_...).';
   }
 
+  if (rawMsg.includes('User location is not supported') || rawMsg.includes('location is not supported')) {
+    return 'Tu región o país no tiene acceso al Free Tier de Google Gemini. Te recomendamos cambiar a Groq en Ajustes > Asistente IA (funciona en todo el mundo y es 100% gratis).';
+  }
+
+  if (rawMsg.includes('SAFETY') || rawMsg.includes('blocked due to SAFETY')) {
+    return 'El filtro de seguridad de Gemini bloqueó la respuesta. Se ajustaron los umbrales de seguridad para consultas clínicas y posturales.';
+  }
+
   if (rawMsg.includes('401') || rawMsg.includes('Unauthorized') || rawMsg.includes('rechazaron la clave')) {
     return 'La clave API de IA no fue autorizada (401). Verifica tu clave en Ajustes > Asistente IA.';
   }
@@ -92,7 +106,7 @@ export function formatAIErrorMessage(error: unknown, provider?: AIProvider): str
     rawMsg.includes('RESOURCE_EXHAUSTED') ||
     rawMsg.includes('agotaron su cuota')
   ) {
-    return 'Límite de cuota alcanzado temporalmente en la IA. Espera 1 minuto o prueba alternar a Groq en Ajustes.';
+    return 'Límite de cuota alcanzado temporalmente en la IA (15 req/min en Gemini). Espera 1 minuto o prueba alternar a Groq en Ajustes.';
   }
 
   if (
@@ -299,7 +313,7 @@ async function groqGenerate(apiKey: string, prompt: string): Promise<string> {
 
 // ─── Gemini ──────────────────────────────────────────────────────────────────
 
-async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
+async function geminiGenerate(apiKey: string, prompt: string, responseJson = false): Promise<string> {
   const key = sanitizeApiKey(apiKey);
   if (!key) {
     throw new Error('API key de Gemini no configurada. Ve a Ajustes > Asistente IA.');
@@ -313,33 +327,45 @@ async function geminiGenerate(apiKey: string, prompt: string): Promise<string> {
     _geminiClientKey = key;
   }
 
+  const safetySettings = [
+    { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_NONE },
+    { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
+  ];
+
   let lastError: any = null;
   for (const modelName of GEMINI_MODELS) {
     try {
-      const model = _geminiClient.getGenerativeModel({ model: modelName });
+      const model = _geminiClient.getGenerativeModel({
+        model: modelName,
+        safetySettings,
+        generationConfig: responseJson ? { responseMimeType: 'application/json', temperature: 0.2 } : { temperature: 0.2 },
+      });
       const result = await model.generateContent(prompt);
-      return result.response.text();
+      const text = result.response.text();
+      if (!text || text.trim().length === 0) {
+        throw new Error(`Gemini respondió contenido vacío con el modelo ${modelName}`);
+      }
+      return text;
     } catch (err: any) {
       lastError = err;
       const msg = err?.message ?? '';
       if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid')) {
         throw new Error('La clave API de Gemini no es válida o ha sido revocada por Google. Obtén una nueva clave en Google AI Studio (aistudio.google.com).');
       }
-      if (msg.includes('429') || msg.includes('quota') || msg.includes('rate') || msg.includes('RESOURCE_EXHAUSTED')) {
-        console.warn(`[AI] Gemini ${modelName} sin cuota, probando siguiente...`);
-        continue;
-      }
-      throw err;
+      console.warn(`[AI] Error con modelo Gemini "${modelName}": ${msg}. Probando siguiente modelo...`);
+      continue;
     }
   }
-  throw lastError ?? new Error('Todos los modelos Gemini agotaron su cuota.');
+  throw lastError ?? new Error('No se pudo generar respuesta con ningún modelo de Gemini disponible.');
 }
 
 // ─── Generador unificado ─────────────────────────────────────────────────────
 
-async function generate(provider: AIProvider, apiKey: string, prompt: string): Promise<string> {
+async function generate(provider: AIProvider, apiKey: string, prompt: string, responseJson = false): Promise<string> {
   if (provider === 'groq') return groqGenerate(apiKey, prompt);
-  return geminiGenerate(apiKey, prompt);
+  return geminiGenerate(apiKey, prompt, responseJson);
 }
 
 // ─── Prompts ─────────────────────────────────────────────────────────────────
@@ -533,7 +559,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 }`;
 
   try {
-    const raw = await generate(provider, apiKey, prompt);
+    const raw = await generate(provider, apiKey, prompt, true);
     const parsed = extractJSON<AIScheduleResult>(raw);
     if (!Array.isArray(parsed.blocks)) throw new Error('Respuesta sin bloques válidos');
 
@@ -693,7 +719,7 @@ Responde ÚNICAMENTE con un objeto JSON válido (sin markdown, sin backticks):
 }`;
 
   try {
-    const raw = await generate(provider, cleanKey, prompt);
+    const raw = await generate(provider, cleanKey, prompt, true);
     const parsed = extractJSON<{ title: string; description: string; macros: string }>(raw);
     if (!parsed.title || !parsed.macros) {
       throw new Error('Respuesta incompleta');
@@ -747,7 +773,7 @@ Responde SOLO con JSON válido (sin markdown, sin backticks):
 {"analysis":"párrafo breve conectando estudio, energía, nutrición y postura","suggestions":["sug 1"],"productivityTips":["tip 1"]}`;
 
   try {
-    const raw = await generate(provider, apiKey, prompt);
+    const raw = await generate(provider, apiKey, prompt, true);
     return extractJSON<AIDailySummary>(raw);
   } catch (error: any) {
     console.error('Error resumen IA:', error);

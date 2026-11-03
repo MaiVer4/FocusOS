@@ -36,7 +36,7 @@ import {
   getOptimalDuration,
   smartAssignTasksToSlots,
 } from './learning-engine';
-import { generateAISchedule, generateAIMealAdaptation, resetAIClient } from './ai-engine';
+import { generateAISchedule, generateAIMealAdaptation, resetAIClient, formatAIErrorMessage } from './ai-engine';
 import type { AIScheduleResult, AIProvider } from './ai-engine';
 import {
   WORKOUT_SPLITS,
@@ -2274,10 +2274,12 @@ class Store {
         if (notificationService.hasPermission()) {
           localBlocks.forEach((b) => notificationService.scheduleBlockNotifications(b));
         }
+        const { provider } = this.getAIConfig();
+        const friendlyErr = formatAIErrorMessage(err, provider);
         return {
           blocks: localBlocks,
           modeUsed: 'auto',
-          notice: 'La IA no estuvo disponible. Se generó tu horario con el protocolo clínico base.',
+          notice: `La IA (${provider === 'gemini' ? 'Google Gemini' : 'Groq'}) no pudo generar la rutina: ${friendlyErr}. Se aplicó tu rutina base automáticamente.`,
         };
       }
     }
